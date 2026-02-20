@@ -46,5 +46,5 @@
   - Kaikkien ruutujen piirto
 
 ## src
-- `src/ArduinoSketch.cpp`
+- `src/main.ino`
   - Arduino setup()/loop()-entrypoint

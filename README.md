@@ -76,5 +76,7 @@ Debug-näyttö näyttää:
 
 ## Build-vian korjaus (setup/loop)
 Jos saat linkityksessä virheen `undefined reference to setup()/loop()`,
-entrypoint on nyt tiedostossa `src/ArduinoSketch.cpp` ja env on nimetty
-`lilygo-t-display-s3` (sama nimi kuin build-kansiossa).
+entrypoint on nyt tiedostossa `src/main.ino` ja env on nimetty
+`lilygo-t-display-s3` (sama nimi kuin build-kansiossa). Lisäksi
+`build_src_filter`-ylikirjoitus poistettiin, jotta PlatformIO käyttää
+oletuslähdehakua eikä jätä setup/loop-tiedostoa pois.
