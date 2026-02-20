@@ -107,9 +107,14 @@ void Application::handleEvent(const hal::ButtonEvent& event) {
       break;
     case domain::Screen::SettingsTheme:
       if (event.id == hal::ButtonId::Left) menu_.current = domain::Screen::Settings;
-      if (event.id == hal::ButtonId::Up || event.id == hal::ButtonId::Down) {
+      if (event.id == hal::ButtonId::Up) {
         uint8_t idx = static_cast<uint8_t>(settings_.theme);
         idx = (idx + 1) % 3;
+        settings_.theme = static_cast<domain::Theme>(idx);
+      }
+      if (event.id == hal::ButtonId::Down) {
+        uint8_t idx = static_cast<uint8_t>(settings_.theme);
+        idx = (idx + 2) % 3;
         settings_.theme = static_cast<domain::Theme>(idx);
       }
       if (event.id == hal::ButtonId::Right) {

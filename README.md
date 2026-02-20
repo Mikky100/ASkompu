@@ -60,8 +60,8 @@ onnistuu ilman hajautettuja "magic number" -arvoja.
 
 ## Build ja flash
 ```bash
-pio run
-pio run -t upload
+pio run -e lilygo-t-display-s3
+pio run -e lilygo-t-display-s3 -t upload
 pio device monitor -b 115200
 ```
 
@@ -72,3 +72,9 @@ Debug-näyttö näyttää:
 - 200 ms ikkunan pulssit
 - kerroin
 - loopin taajuus (Hz)
+
+
+## Build-vian korjaus (setup/loop)
+Jos saat linkityksessä virheen `undefined reference to setup()/loop()`,
+entrypoint on nyt tiedostossa `src/ArduinoSketch.cpp` ja env on nimetty
+`lilygo-t-display-s3` (sama nimi kuin build-kansiossa).
