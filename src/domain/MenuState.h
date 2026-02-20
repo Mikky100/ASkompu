@@ -6,9 +6,6 @@ namespace domain {
 
 enum class Screen : uint8_t {
   Main = 0,
-  Menu,
-  Display,
-  Settings,
   SettingsClock,
   SettingsCoefficient,
   SettingsTheme,
@@ -16,9 +13,7 @@ enum class Screen : uint8_t {
 };
 
 struct MenuState {
-  Screen current = Screen::Main;
-  uint8_t menuIndex = 0;
-  uint8_t settingsIndex = 0;
+  Screen current = Screen::SettingsClock;
 };
 
 }  // namespace domain

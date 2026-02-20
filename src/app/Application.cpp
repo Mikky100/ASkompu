@@ -4,9 +4,41 @@
 
 namespace app {
 
+domain::Screen Application::nextScreen(domain::Screen current) const {
+  switch (current) {
+    case domain::Screen::SettingsClock:
+      return domain::Screen::SettingsCoefficient;
+    case domain::Screen::SettingsCoefficient:
+      return domain::Screen::SettingsTheme;
+    case domain::Screen::SettingsTheme:
+      return domain::Screen::Main;
+    case domain::Screen::Main:
+      return domain::Screen::Debug;
+    case domain::Screen::Debug:
+    default:
+      return domain::Screen::SettingsClock;
+  }
+}
+
+domain::Screen Application::prevScreen(domain::Screen current) const {
+  switch (current) {
+    case domain::Screen::SettingsClock:
+      return domain::Screen::Debug;
+    case domain::Screen::SettingsCoefficient:
+      return domain::Screen::SettingsClock;
+    case domain::Screen::SettingsTheme:
+      return domain::Screen::SettingsCoefficient;
+    case domain::Screen::Main:
+      return domain::Screen::SettingsTheme;
+    case domain::Screen::Debug:
+    default:
+      return domain::Screen::Main;
+  }
+}
+
 void Application::setup() {
   storage_.begin();
-  bool hasClock = storage_.load(settings_);
+  storage_.load(settings_);
 
   display_.begin();
   buttons_.begin();
@@ -20,10 +52,8 @@ void Application::setup() {
   clockEditHours_ = settings_.clock.hours();
   clockEditMinutes_ = settings_.clock.minutes();
 
-  if (!hasClock) {
-    menu_.current = domain::Screen::SettingsClock;
-    editMinutes_ = false;
-  }
+  menu_.current = domain::Screen::SettingsClock;
+  editMinutes_ = false;
 
   lastDiagMs_ = millis();
   lastLoopHzMs_ = millis();
@@ -44,102 +74,71 @@ void Application::handleEvent(const hal::ButtonEvent& event) {
               event.type == hal::ButtonEventType::Repeat);
   if (!nav) return;
 
-  domain::Screen previous = menu_.current;
-
-  switch (menu_.current) {
-    case domain::Screen::Main:
-    case domain::Screen::Display:
-      if (event.id == hal::ButtonId::Left) menu_.current = domain::Screen::Menu;
-      break;
-    case domain::Screen::Menu:
-      if (event.id == hal::ButtonId::Up && menu_.menuIndex > 0) menu_.menuIndex--;
-      if (event.id == hal::ButtonId::Down && menu_.menuIndex < 2) menu_.menuIndex++;
-      if (event.id == hal::ButtonId::Left) menu_.current = domain::Screen::Main;
-      if (event.id == hal::ButtonId::Right) {
-        if (menu_.menuIndex == 0) menu_.current = domain::Screen::Display;
-        if (menu_.menuIndex == 1) menu_.current = domain::Screen::Settings;
-        if (menu_.menuIndex == 2) menu_.current = domain::Screen::Debug;
+  if (menu_.current == domain::Screen::SettingsClock) {
+    if (event.id == hal::ButtonId::Up) {
+      if (editMinutes_)
+        clockEditMinutes_ = (clockEditMinutes_ + 1) % 60;
+      else
+        clockEditHours_ = (clockEditHours_ + 1) % 24;
+    }
+    if (event.id == hal::ButtonId::Down) {
+      if (editMinutes_)
+        clockEditMinutes_ = (clockEditMinutes_ + 59) % 60;
+      else
+        clockEditHours_ = (clockEditHours_ + 23) % 24;
+    }
+    if (event.id == hal::ButtonId::Right) {
+      if (!editMinutes_) {
+        editMinutes_ = true;
+      } else {
+        settings_.clock.set(clockEditHours_, clockEditMinutes_);
+        editMinutes_ = false;
+        menu_.current = nextScreen(menu_.current);
       }
-      break;
-    case domain::Screen::Settings:
-      if (event.id == hal::ButtonId::Up && menu_.settingsIndex > 0) menu_.settingsIndex--;
-      if (event.id == hal::ButtonId::Down && menu_.settingsIndex < 2) menu_.settingsIndex++;
-      if (event.id == hal::ButtonId::Left) menu_.current = domain::Screen::Menu;
-      if (event.id == hal::ButtonId::Right) {
-        if (menu_.settingsIndex == 0) {
-          clockEditHours_ = settings_.clock.hours();
-          clockEditMinutes_ = settings_.clock.minutes();
-          editMinutes_ = false;
-          menu_.current = domain::Screen::SettingsClock;
-        }
-        if (menu_.settingsIndex == 1) menu_.current = domain::Screen::SettingsCoefficient;
-        if (menu_.settingsIndex == 2) menu_.current = domain::Screen::SettingsTheme;
+    }
+    if (event.id == hal::ButtonId::Left) {
+      if (editMinutes_) {
+        editMinutes_ = false;
+      } else {
+        menu_.current = prevScreen(menu_.current);
       }
-      break;
-    case domain::Screen::SettingsClock:
-      if (event.id == hal::ButtonId::Left) {
-        if (editMinutes_) {
-          editMinutes_ = false;
-        } else {
-          menu_.current = domain::Screen::Settings;
-        }
-      }
-      if (event.id == hal::ButtonId::Right) {
-        if (!editMinutes_) {
-          editMinutes_ = true;
-        } else {
-          settings_.clock.set(clockEditHours_, clockEditMinutes_);
-          storage_.saveClock(clockEditHours_, clockEditMinutes_);
-          menu_.current = domain::Screen::Settings;
-          editMinutes_ = false;
-        }
-      }
-      if (event.id == hal::ButtonId::Up) {
-        if (editMinutes_)
-          clockEditMinutes_ = (clockEditMinutes_ + 1) % 60;
-        else
-          clockEditHours_ = (clockEditHours_ + 1) % 24;
-      }
-      if (event.id == hal::ButtonId::Down) {
-        if (editMinutes_)
-          clockEditMinutes_ = (clockEditMinutes_ + 59) % 60;
-        else
-          clockEditHours_ = (clockEditHours_ + 23) % 24;
-      }
-      break;
-    case domain::Screen::SettingsCoefficient:
-      if (event.id == hal::ButtonId::Left) menu_.current = domain::Screen::Settings;
-      if (event.id == hal::ButtonId::Up) settings_.coefficient += 10;
-      if (event.id == hal::ButtonId::Down && settings_.coefficient > 10)
-        settings_.coefficient -= 10;
-      if (event.id == hal::ButtonId::Right) {
-        storage_.saveCoefficient(settings_.coefficient);
-        menu_.current = domain::Screen::Settings;
-      }
-      break;
-    case domain::Screen::SettingsTheme:
-      if (event.id == hal::ButtonId::Left) menu_.current = domain::Screen::Settings;
-      if (event.id == hal::ButtonId::Up) {
-        uint8_t idx = static_cast<uint8_t>(settings_.theme);
-        idx = (idx + 1) % 3;
-        settings_.theme = static_cast<domain::Theme>(idx);
-      }
-      if (event.id == hal::ButtonId::Down) {
-        uint8_t idx = static_cast<uint8_t>(settings_.theme);
-        idx = (idx + 2) % 3;
-        settings_.theme = static_cast<domain::Theme>(idx);
-      }
-      if (event.id == hal::ButtonId::Right) {
-        storage_.saveTheme(settings_.theme);
-        menu_.current = domain::Screen::Settings;
-      }
-      break;
-    case domain::Screen::Debug:
-      if (event.id == hal::ButtonId::Left) menu_.current = domain::Screen::Menu;
-      break;
+    }
+    renderDirty_ = true;
+    return;
   }
 
-  if (menu_.current != previous || nav) {
+  if (event.id == hal::ButtonId::Left) {
+    menu_.current = prevScreen(menu_.current);
+    renderDirty_ = true;
+    return;
+  }
+  if (event.id == hal::ButtonId::Right) {
+    menu_.current = nextScreen(menu_.current);
+    renderDirty_ = true;
+    return;
+  }
+
+  if (menu_.current == domain::Screen::SettingsCoefficient) {
+    if (event.id == hal::ButtonId::Up) settings_.coefficient += 10;
+    if (event.id == hal::ButtonId::Down && settings_.coefficient > 10) settings_.coefficient -= 10;
+    storage_.saveCoefficient(settings_.coefficient);
+    renderDirty_ = true;
+    return;
+  }
+
+  if (menu_.current == domain::Screen::SettingsTheme) {
+    if (event.id == hal::ButtonId::Up) {
+      uint8_t idx = static_cast<uint8_t>(settings_.theme);
+      idx = (idx + 1) % 3;
+      settings_.theme = static_cast<domain::Theme>(idx);
+      storage_.saveTheme(settings_.theme);
+    }
+    if (event.id == hal::ButtonId::Down) {
+      uint8_t idx = static_cast<uint8_t>(settings_.theme);
+      idx = (idx + 2) % 3;
+      settings_.theme = static_cast<domain::Theme>(idx);
+      storage_.saveTheme(settings_.theme);
+    }
     renderDirty_ = true;
   }
 }
@@ -162,7 +161,9 @@ void Application::updateDiagnostics(unsigned long now) {
     diag_.kmh = metersPerSec * 3.6f;
 
     lastDiagMs_ = now;
-    if (menu_.current == domain::Screen::Debug) renderDirty_ = true;
+    if (menu_.current == domain::Screen::Debug || menu_.current == domain::Screen::Main) {
+      renderDirty_ = true;
+    }
   }
 
   loopCounter_++;
@@ -174,27 +175,17 @@ void Application::updateDiagnostics(unsigned long now) {
   }
 }
 
-void Application::render(bool force) {
+void Application::render() {
   unsigned long now = millis();
-  bool periodicMain =
-      (menu_.current == domain::Screen::Main || menu_.current == domain::Screen::Display) &&
-      (now - lastRenderMs_ >= 250);
-
-  if (!force && !renderDirty_ && !periodicMain && menu_.current == lastRenderedScreen_) {
+  bool periodicMain = (menu_.current == domain::Screen::Main) && (now - lastRenderMs_ >= 250);
+  if (!renderDirty_ && !periodicMain) {
     return;
   }
 
   uint32_t effectivePulses = trip_.calculateEffectivePulses(speedInput_.pulseCount());
   switch (menu_.current) {
     case domain::Screen::Main:
-    case domain::Screen::Display:
-      renderer_->drawMain(settings_, trip_, effectivePulses);
-      break;
-    case domain::Screen::Menu:
-      renderer_->drawMenu(menu_.menuIndex);
-      break;
-    case domain::Screen::Settings:
-      renderer_->drawSettingsMenu(menu_.settingsIndex);
+      renderer_->drawMain(settings_, trip_, points_, effectivePulses);
       break;
     case domain::Screen::SettingsClock:
       renderer_->drawClockEditor(clockEditHours_, clockEditMinutes_, editMinutes_);
@@ -210,7 +201,6 @@ void Application::render(bool force) {
       break;
   }
 
-  lastRenderedScreen_ = menu_.current;
   lastRenderMs_ = now;
   renderDirty_ = false;
 }
@@ -219,7 +209,7 @@ void Application::loop() {
   buttons_.update();
   handleEvent(buttons_.popEvent());
   updateDiagnostics(millis());
-  render(false);
+  render();
   delay(10);
 }
 

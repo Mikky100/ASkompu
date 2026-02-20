@@ -12,32 +12,32 @@
 ## src/app
 - `src/app/Application.h/.cpp`
   - Sovelluksen setup/loop
-  - Näyttötilat ja navigointi
-  - Renderöinnin throttlaus (vähentää välkkymistä)
-  - Ensikäynnistyksen kellokysely, jos kelloa ei ole NVS:ssä
+  - Suora ruutunavigointi ilman erillistä valikkolistaa
+  - Käynnistyksessä avaa aina kelloruudun
 
 ## src/hal
 - `src/hal/Display.h/.cpp`
   - TFT_eSPI-käärö
 - `src/hal/Buttons.h/.cpp`
-  - Debounce + event API (Pressed/Released/Repeat)
+  - Debounce + event API
 - `src/hal/SpeedInput.h/.cpp`
   - Keskeytyspohjainen pulssilaskenta + 200 ms ikkuna
 - `src/hal/Storage.h/.cpp`
-  - Preferences/NVS-lataus ja -tallennus
-  - palauttaa tiedon onko kello asetettu aiemmin
+  - Preferences/NVS tallentaa vain kertoimen ja teeman
 
 ## src/domain
 - `src/domain/Settings.h`
   - Käyttäjäasetukset
 - `src/domain/Theme.h`
-  - Teemat ja paletit (Punainen/Vihreä/Sininen)
+  - Teemat (punainen/vihreä/sininen)
 - `src/domain/TimeModel.h`
-  - Yksinkertainen HH:MM-aikamalli millis()-päivityksellä
+  - HH:MM-aikamalli millis()-päivityksellä
 - `src/domain/TripModel.h`
-  - Trip-matkan laskenta ja reset-offset
+  - Trip-laskenta ja reset-offset
+- `src/domain/PointsModel.h`
+  - Pisteiden placeholder-malli (v0.0.1 minimi)
 - `src/domain/MenuState.h`
-  - Ruututila + valikkovalinnat
+  - Aktiivinen ruutu
 - `src/domain/Diagnostics.h`
   - Debug-näkymän data
 
@@ -45,8 +45,7 @@
 - `src/ui/Layout.h/.cpp`
   - Keskitetyt rectit + fonttikoot
 - `src/ui/Renderer.h/.cpp`
-  - Kaikkien ruutujen piirto
-  - päänäkymässä osittainen päivitys (ei aina full-screen clear)
+  - Pääruutu + asetusruudut + debug
 
 ## src
 - `src/main.ino`

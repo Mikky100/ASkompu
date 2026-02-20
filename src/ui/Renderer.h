@@ -1,7 +1,7 @@
 #pragma once
 
 #include "domain/Diagnostics.h"
-#include "domain/MenuState.h"
+#include "domain/PointsModel.h"
 #include "domain/Settings.h"
 #include "domain/TripModel.h"
 #include "ui/Layout.h"
@@ -13,9 +13,7 @@ class Renderer {
   explicit Renderer(Layout& layout) : layout_(layout) {}
 
   void drawMain(const domain::Settings& settings, const domain::TripModel& trip,
-                uint32_t effectivePulses);
-  void drawMenu(uint8_t selected);
-  void drawSettingsMenu(uint8_t selected);
+                const domain::PointsModel& points, uint32_t effectivePulses);
   void drawClockEditor(uint8_t hh, uint8_t mm, bool editMinutes);
   void drawCoefficientEditor(uint32_t coefficient);
   void drawThemeEditor(domain::Theme theme);
@@ -23,7 +21,6 @@ class Renderer {
 
  private:
   Layout& layout_;
-  void clearWithTheme(domain::Theme theme);
 };
 
 }  // namespace ui

@@ -2,6 +2,7 @@
 
 #include "domain/Diagnostics.h"
 #include "domain/MenuState.h"
+#include "domain/PointsModel.h"
 #include "domain/Settings.h"
 #include "domain/TripModel.h"
 #include "hal/Buttons.h"
@@ -21,7 +22,10 @@ class Application {
  private:
   void handleEvent(const hal::ButtonEvent& event);
   void updateDiagnostics(unsigned long now);
-  void render(bool force);
+  void render();
+
+  domain::Screen nextScreen(domain::Screen current) const;
+  domain::Screen prevScreen(domain::Screen current) const;
 
   hal::Display display_;
   hal::Buttons buttons_;
@@ -30,6 +34,7 @@ class Application {
 
   domain::Settings settings_;
   domain::TripModel trip_;
+  domain::PointsModel points_;
   domain::MenuState menu_;
   domain::Diagnostics diag_;
 
@@ -41,7 +46,6 @@ class Application {
   unsigned long lastRenderMs_ = 0;
   uint16_t loopCounter_ = 0;
   bool renderDirty_ = true;
-  domain::Screen lastRenderedScreen_ = domain::Screen::Main;
 
   uint8_t clockEditHours_ = 12;
   uint8_t clockEditMinutes_ = 0;
