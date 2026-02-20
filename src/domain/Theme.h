@@ -12,20 +12,20 @@ struct Palette {
   uint16_t dim;
 };
 
-enum class Theme : uint8_t { NightBlue = 0, Amber = 1, Neon = 2 };
+enum class Theme : uint8_t { Red = 0, Green = 1, Blue = 2 };
 
 inline const Palette& paletteForTheme(Theme theme) {
-  static const Palette kNightBlue{TFT_BLACK, TFT_CYAN, TFT_GREEN, TFT_DARKGREY};
-  static const Palette kAmber{TFT_BLACK, TFT_ORANGE, TFT_YELLOW, TFT_DARKGREY};
-  static const Palette kNeon{TFT_NAVY, TFT_MAGENTA, TFT_GREENYELLOW, TFT_DARKGREY};
+  static const Palette kRed{TFT_BLACK, TFT_RED, TFT_MAROON, TFT_DARKGREY};
+  static const Palette kGreen{TFT_BLACK, TFT_GREEN, TFT_DARKGREEN, TFT_DARKGREY};
+  static const Palette kBlue{TFT_BLACK, TFT_CYAN, TFT_BLUE, TFT_DARKGREY};
 
   switch (theme) {
-    case Theme::Amber:
-      return kAmber;
-    case Theme::Neon:
-      return kNeon;
+    case Theme::Green:
+      return kGreen;
+    case Theme::Blue:
+      return kBlue;
     default:
-      return kNightBlue;
+      return kRed;
   }
 }
 

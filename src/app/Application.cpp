@@ -6,7 +6,7 @@ namespace app {
 
 void Application::setup() {
   storage_.begin();
-  storage_.load(settings_);
+  bool hasClock = storage_.load(settings_);
 
   display_.begin();
   buttons_.begin();
@@ -20,8 +20,15 @@ void Application::setup() {
   clockEditHours_ = settings_.clock.hours();
   clockEditMinutes_ = settings_.clock.minutes();
 
+  if (!hasClock) {
+    menu_.current = domain::Screen::SettingsClock;
+    editMinutes_ = false;
+  }
+
   lastDiagMs_ = millis();
   lastLoopHzMs_ = millis();
+  lastRenderMs_ = 0;
+  renderDirty_ = true;
 }
 
 void Application::handleEvent(const hal::ButtonEvent& event) {
@@ -29,11 +36,15 @@ void Application::handleEvent(const hal::ButtonEvent& event) {
 
   if (event.id == hal::ButtonId::TripReset && event.type == hal::ButtonEventType::Pressed) {
     trip_.setTotalPulsesAtReset(speedInput_.pulseCount());
+    renderDirty_ = true;
     return;
   }
 
-  bool nav = (event.type == hal::ButtonEventType::Pressed || event.type == hal::ButtonEventType::Repeat);
+  bool nav = (event.type == hal::ButtonEventType::Pressed ||
+              event.type == hal::ButtonEventType::Repeat);
   if (!nav) return;
+
+  domain::Screen previous = menu_.current;
 
   switch (menu_.current) {
     case domain::Screen::Main:
@@ -99,7 +110,8 @@ void Application::handleEvent(const hal::ButtonEvent& event) {
     case domain::Screen::SettingsCoefficient:
       if (event.id == hal::ButtonId::Left) menu_.current = domain::Screen::Settings;
       if (event.id == hal::ButtonId::Up) settings_.coefficient += 10;
-      if (event.id == hal::ButtonId::Down && settings_.coefficient > 10) settings_.coefficient -= 10;
+      if (event.id == hal::ButtonId::Down && settings_.coefficient > 10)
+        settings_.coefficient -= 10;
       if (event.id == hal::ButtonId::Right) {
         storage_.saveCoefficient(settings_.coefficient);
         menu_.current = domain::Screen::Settings;
@@ -126,6 +138,10 @@ void Application::handleEvent(const hal::ButtonEvent& event) {
       if (event.id == hal::ButtonId::Left) menu_.current = domain::Screen::Menu;
       break;
   }
+
+  if (menu_.current != previous || nav) {
+    renderDirty_ = true;
+  }
 }
 
 void Application::updateDiagnostics(unsigned long now) {
@@ -140,11 +156,13 @@ void Application::updateDiagnostics(unsigned long now) {
     diag_.pulseCount = totalPulses;
     diag_.pulsesWindow = windowPulses;
 
-    float metersPerPulse = 1.0f / static_cast<float>(settings_.coefficient == 0 ? 1 : settings_.coefficient);
+    float metersPerPulse =
+        1.0f / static_cast<float>(settings_.coefficient == 0 ? 1 : settings_.coefficient);
     float metersPerSec = (windowPulses * metersPerPulse) / 0.2f;
     diag_.kmh = metersPerSec * 3.6f;
 
     lastDiagMs_ = now;
+    if (menu_.current == domain::Screen::Debug) renderDirty_ = true;
   }
 
   loopCounter_++;
@@ -152,10 +170,20 @@ void Application::updateDiagnostics(unsigned long now) {
     diag_.loopHz = loopCounter_;
     loopCounter_ = 0;
     lastLoopHzMs_ = now;
+    if (menu_.current == domain::Screen::Debug) renderDirty_ = true;
   }
 }
 
-void Application::render() {
+void Application::render(bool force) {
+  unsigned long now = millis();
+  bool periodicMain =
+      (menu_.current == domain::Screen::Main || menu_.current == domain::Screen::Display) &&
+      (now - lastRenderMs_ >= 250);
+
+  if (!force && !renderDirty_ && !periodicMain && menu_.current == lastRenderedScreen_) {
+    return;
+  }
+
   uint32_t effectivePulses = trip_.calculateEffectivePulses(speedInput_.pulseCount());
   switch (menu_.current) {
     case domain::Screen::Main:
@@ -181,14 +209,18 @@ void Application::render() {
       renderer_->drawDebug(diag_, settings_.coefficient);
       break;
   }
+
+  lastRenderedScreen_ = menu_.current;
+  lastRenderMs_ = now;
+  renderDirty_ = false;
 }
 
 void Application::loop() {
   buttons_.update();
   handleEvent(buttons_.popEvent());
   updateDiagnostics(millis());
-  render();
-  delay(16);
+  render(false);
+  delay(10);
 }
 
 }  // namespace app

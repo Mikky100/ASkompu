@@ -1,9 +1,9 @@
 # AS-kompu v0.0.1 (firmware skeleton)
 
-AS-kompu v0.0.1 on rakennettava PlatformIO-pohja LilyGo T-Display S3 -laitteelle.
-Tämä versio sisältää toimivan valikkonavigoinnin nuolinäppäimillä, perusasetukset
-(kello, matkakerroin, teema), keskitetyn UI-layoutin sekä debug-näkymän,
-jonne km/h on rajattu.
+AS-kompu v0.0.1 on PlatformIO-pohja LilyGo T-Display S3 -laitteelle.
+Tässä versiossa on toimiva valikkonavigointi nuolinäppäimillä,
+perusasetukset (kello, matkakerroin, teema), keskitetty UI-layout,
+sekä debug-näkymä johon km/h on rajattu.
 
 ## Tavoite v0.0.1
 - Käynnistyy päänäkymään ("Näyttö")
@@ -11,6 +11,16 @@ jonne km/h on rajattu.
 - Asetukset tallentuvat NVS:ään (Preferences)
 - Trip-reset toimii GPIO14:llä
 - km/h näkyy vain Debug-näytössä
+
+## Päivitys käyttäjäpalautteen perusteella
+- Näytön välkkymistä vähennetty:
+  - renderöintiä ei tehdä enää jokaisessa loopissa,
+  - päänäkymä päivittyy jaksollisesti (~250 ms) ja valikot tapahtumaperusteisesti,
+  - päänäkymässä tyhjennetään vain osiot (rectit), ei koko ruutua.
+- Ensikäynnistyksellä kellon asetus avataan automaattisesti,
+  jos HH:MM-arvoa ei ole vielä tallennettu NVS:ään.
+- Oletustekstiväri on punainen.
+- Teemavaihtoehdot: **Punainen / Vihreä / Sininen**.
 
 ## Arkkitehtuuri
 
@@ -32,8 +42,8 @@ Määritykset löytyvät tiedostosta `include/BoardConfig.h`.
 - Nuolinäppäimet (UP/DOWN/LEFT/RIGHT): **väliaikaiset placeholderit**
 
 > Huom: ESP32testCount-repon GPIO-mappia ei voitu hakea tässä ympäristössä
-> (verkko-eston vuoksi), joten nuolinäppäinten arvot on merkattu TODO:lla.
-> Korvaa ne suoraan prototyypin arvoilla, kun yhteys on käytettävissä.
+> verkko-/policy-rajoitusten vuoksi. Korvaa nuolinäppäinten arvot suoraan
+> prototyypin arvoilla, kun yhteys on käytettävissä.
 
 ## Valikon käyttö
 - **LEFT**: takaisin / avaa valikon päänäytöstä
@@ -43,19 +53,19 @@ Määritykset löytyvät tiedostosta `include/BoardConfig.h`.
 Asetukset:
 1. **Kello**: HH:MM (24 h), tunnit ja minuutit säädettävissä
 2. **Kerroin**: oletus 1000 (pulssia per metri)
-3. **Teema**: 3 yötä varten sopivaa tummaa teemaa
+3. **Teema**: Punainen / Vihreä / Sininen
 
 ### Kerroin-selitys
-Kerroin tulkitaan tässä muodossa: `pulssia per metri`.
+Kerroin tulkitaan muodossa: `pulssia per metri`.
 - suurempi luku => sama matka vaatii enemmän pulsseja => laskettu matka kasvaa hitaammin
 - pienempi luku => sama pulssimäärä vastaa pidempää matkaa
 
 ## Layoutin säätö eri näytölle
-Muokkaa tiedostoa `src/ui/Layout.cpp`:
-- `rectClock`, `rectPoints`, `rectTrip`, `rectStatus`, `rectMenu`
-- fonttikoot `src/ui/Layout.h` (`fontHuge`, `fontLarge`, `fontSmall`)
+Muokkaa tiedostoja:
+- `src/ui/Layout.cpp`: `rectClock`, `rectPoints`, `rectTrip`, `rectStatus`, `rectMenu`
+- `src/ui/Layout.h`: fonttikoot `fontHuge`, `fontLarge`, `fontSmall`
 
-Renderöinti käyttää vain näitä nimettyjä alueita, joten elementtien siirto/koon muutos
+Renderöinti käyttää näitä nimettyjä alueita, joten elementtien paikka/koon muutos
 onnistuu ilman hajautettuja "magic number" -arvoja.
 
 ## Build ja flash
@@ -72,11 +82,3 @@ Debug-näyttö näyttää:
 - 200 ms ikkunan pulssit
 - kerroin
 - loopin taajuus (Hz)
-
-
-## Build-vian korjaus (setup/loop)
-Jos saat linkityksessä virheen `undefined reference to setup()/loop()`,
-entrypoint on nyt tiedostossa `src/main.ino` ja env on nimetty
-`lilygo-t-display-s3` (sama nimi kuin build-kansiossa). Lisäksi
-`build_src_filter`-ylikirjoitus poistettiin, jotta PlatformIO käyttää
-oletuslähdehakua eikä jätä setup/loop-tiedostoa pois.

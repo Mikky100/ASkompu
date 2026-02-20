@@ -13,7 +13,8 @@
 - `src/app/Application.h/.cpp`
   - Sovelluksen setup/loop
   - Näyttötilat ja navigointi
-  - Asetusten muokkauslogiikka
+  - Renderöinnin throttlaus (vähentää välkkymistä)
+  - Ensikäynnistyksen kellokysely, jos kelloa ei ole NVS:ssä
 
 ## src/hal
 - `src/hal/Display.h/.cpp`
@@ -24,12 +25,13 @@
   - Keskeytyspohjainen pulssilaskenta + 200 ms ikkuna
 - `src/hal/Storage.h/.cpp`
   - Preferences/NVS-lataus ja -tallennus
+  - palauttaa tiedon onko kello asetettu aiemmin
 
 ## src/domain
 - `src/domain/Settings.h`
   - Käyttäjäasetukset
 - `src/domain/Theme.h`
-  - Teemat ja paletit
+  - Teemat ja paletit (Punainen/Vihreä/Sininen)
 - `src/domain/TimeModel.h`
   - Yksinkertainen HH:MM-aikamalli millis()-päivityksellä
 - `src/domain/TripModel.h`
@@ -44,6 +46,7 @@
   - Keskitetyt rectit + fonttikoot
 - `src/ui/Renderer.h/.cpp`
   - Kaikkien ruutujen piirto
+  - päänäkymässä osittainen päivitys (ei aina full-screen clear)
 
 ## src
 - `src/main.ino`

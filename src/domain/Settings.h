@@ -8,7 +8,7 @@ namespace domain {
 struct Settings {
   TimeModel clock;
   uint32_t coefficient = 1000;
-  Theme theme = Theme::NightBlue;
+  Theme theme = Theme::Red;
 };
 
 }  // namespace domain

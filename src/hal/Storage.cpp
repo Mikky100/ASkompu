@@ -12,12 +12,15 @@ namespace hal {
 
 void Storage::begin() { prefs_.begin(kNs, false); }
 
-void Storage::load(domain::Settings& settings) {
+bool Storage::load(domain::Settings& settings) {
   settings.coefficient = prefs_.getULong(kCoeff, 1000);
   settings.theme = static_cast<domain::Theme>(prefs_.getUChar(kTheme, 0));
+
+  bool hasClock = prefs_.isKey(kHour) && prefs_.isKey(kMinute);
   uint8_t hh = prefs_.getUChar(kHour, 12);
   uint8_t mm = prefs_.getUChar(kMinute, 0);
   settings.clock.set(hh, mm);
+  return hasClock;
 }
 
 void Storage::saveCoefficient(uint32_t value) { prefs_.putULong(kCoeff, value); }

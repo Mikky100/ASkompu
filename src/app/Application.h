@@ -21,7 +21,7 @@ class Application {
  private:
   void handleEvent(const hal::ButtonEvent& event);
   void updateDiagnostics(unsigned long now);
-  void render();
+  void render(bool force);
 
   hal::Display display_;
   hal::Buttons buttons_;
@@ -38,7 +38,10 @@ class Application {
 
   unsigned long lastDiagMs_ = 0;
   unsigned long lastLoopHzMs_ = 0;
+  unsigned long lastRenderMs_ = 0;
   uint16_t loopCounter_ = 0;
+  bool renderDirty_ = true;
+  domain::Screen lastRenderedScreen_ = domain::Screen::Main;
 
   uint8_t clockEditHours_ = 12;
   uint8_t clockEditMinutes_ = 0;
