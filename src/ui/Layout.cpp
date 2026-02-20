@@ -10,11 +10,11 @@ void Layout::recalc() {
   const int w = tft.width();
   const int h = tft.height();
 
-  rectClock = {0, 0, w, 24};
-  rectPoints = {0, 24, w, 40};
-  rectTrip = {0, 64, w, 74};
-  rectStatus = {0, 138, w, h - 138};
-  rectMenu = {10, 20, w - 20, h - 40};
+  rectClock = Rect{0, 0, w, 24};
+  rectPoints = Rect{0, 24, w, 40};
+  rectTrip = Rect{0, 64, w, 74};
+  rectStatus = Rect{0, 138, w, h - 138};
+  rectMenu = Rect{10, 20, w - 20, h - 40};
 }
 
 }  // namespace ui

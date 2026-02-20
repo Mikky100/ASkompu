@@ -5,15 +5,22 @@
 
 namespace ui {
 
+struct Rect {
+  int16_t x;
+  int16_t y;
+  int16_t w;
+  int16_t h;
+};
+
 struct Layout {
   TFT_eSPI& tft;
   TFT_eSprite canvas;
 
-  TFT_eRect rectClock;
-  TFT_eRect rectPoints;
-  TFT_eRect rectTrip;
-  TFT_eRect rectStatus;
-  TFT_eRect rectMenu;
+  Rect rectClock;
+  Rect rectPoints;
+  Rect rectTrip;
+  Rect rectStatus;
+  Rect rectMenu;
 
   uint8_t fontHuge = 8;
   uint8_t fontLarge = 6;

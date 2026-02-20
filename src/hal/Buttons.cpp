@@ -10,11 +10,11 @@ constexpr unsigned long kRepeatMs = 250;
 namespace hal {
 
 void Buttons::begin() {
-  states_[0] = {BoardConfig::PIN_BUTTON_UP, BoardConfig::BUTTONS_ACTIVE_LOW};
-  states_[1] = {BoardConfig::PIN_BUTTON_DOWN, BoardConfig::BUTTONS_ACTIVE_LOW};
-  states_[2] = {BoardConfig::PIN_BUTTON_LEFT, BoardConfig::BUTTONS_ACTIVE_LOW};
-  states_[3] = {BoardConfig::PIN_BUTTON_RIGHT, BoardConfig::BUTTONS_ACTIVE_LOW};
-  states_[4] = {BoardConfig::PIN_TRIP_RESET, BoardConfig::TRIP_RESET_ACTIVE_LOW};
+  states_[0] = BtnState{BoardConfig::PIN_BUTTON_UP, BoardConfig::BUTTONS_ACTIVE_LOW, false, false, 0, 0};
+  states_[1] = BtnState{BoardConfig::PIN_BUTTON_DOWN, BoardConfig::BUTTONS_ACTIVE_LOW, false, false, 0, 0};
+  states_[2] = BtnState{BoardConfig::PIN_BUTTON_LEFT, BoardConfig::BUTTONS_ACTIVE_LOW, false, false, 0, 0};
+  states_[3] = BtnState{BoardConfig::PIN_BUTTON_RIGHT, BoardConfig::BUTTONS_ACTIVE_LOW, false, false, 0, 0};
+  states_[4] = BtnState{BoardConfig::PIN_TRIP_RESET, BoardConfig::TRIP_RESET_ACTIVE_LOW, false, false, 0, 0};
 
   for (auto& state : states_) {
     pinMode(state.pin, INPUT_PULLUP);
@@ -31,7 +31,7 @@ bool Buttons::readPressed(const BtnState& state) const {
 
 void Buttons::pushEvent(ButtonId id, ButtonEventType type) {
   if (queued_.type == ButtonEventType::None) {
-    queued_ = {id, type};
+    queued_ = ButtonEvent{id, type};
   }
 }
 
@@ -62,7 +62,7 @@ void Buttons::update() {
 
 ButtonEvent Buttons::popEvent() {
   ButtonEvent ev = queued_;
-  queued_ = {};
+  queued_ = ButtonEvent{};
   return ev;
 }
 
