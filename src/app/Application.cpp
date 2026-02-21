@@ -156,7 +156,7 @@ void Application::updateDiagnostics(unsigned long now) {
     diag_.pulsesWindow = windowPulses;
 
     float metersPerPulse =
-        1.0f / static_cast<float>(settings_.coefficient == 0 ? 1 : settings_.coefficient);
+        1000.0f / static_cast<float>(settings_.coefficient == 0 ? 1 : settings_.coefficient);
     float metersPerSec = (windowPulses * metersPerPulse) / 0.2f;
     diag_.kmh = metersPerSec * 3.6f;
 

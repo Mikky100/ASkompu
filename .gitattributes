@@ -1,0 +1,6 @@
+# Default: keep LF in repo, convert to LF in working tree too
+* text eol=lf
+
+# Optional: Windows batch
+*.bat text eol=crlf
+*.cmd text eol=crlf

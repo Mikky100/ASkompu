@@ -1,0 +1,3 @@
+# Datamallit
+
+PointSegment, Stage, Settings

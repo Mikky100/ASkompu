@@ -11,7 +11,7 @@ class TripModel {
       tripMeters_ = 0;
       return;
     }
-    tripMeters_ = pulseCount / coefficient;
+    tripMeters_ = (pulseCount * 1000UL) / coefficient;
   }
 
   void reset() { resetOffset_ = totalPulsesAtReset_; }
