@@ -24,7 +24,7 @@ nuolinäppäimillä suoraan ruudusta toiseen, ilman erillistä listavalikkoa.
 - Tallennetaan NVS:ään:
   - kerroin
   - teema
-- **Kelloa ei tallenneta NVS:ään** (pyynnön mukaisesti).
+- **Kelloa ei tallenneta NVS:ään**
 
 ## Teemat
 - Oletus: punainen
@@ -46,12 +46,8 @@ include/
 Määritykset löytyvät tiedostosta `include/BoardConfig.h`.
 
 - Trip reset: GPIO14 (aktiivinen LOW)
-- Nopeuspulssi: GPIO21 (oletus)
-- Nuolinäppäimet (UP/DOWN/LEFT/RIGHT): väliaikaiset placeholderit
-
-> Huom: ESP32testCount-repon suora haku on estetty tässä ympäristössä
-> (403 / policy), joten nuolinäppäinten GPIO-arvot on yhä täytettävä
-> protorepon mukaan.
+- Nopeuspulssi: GPIO16 (oletus)
+- Nuolinäppäimet (UP/DOWN/LEFT/RIGHT): GPIO2/GPIO3/GPIO1/GPIO10
 
 ## Layoutin säätö
 - `src/ui/Layout.cpp`: rectit (`rectClock`, `rectPoints`, `rectTrip`, `rectStatus`)
