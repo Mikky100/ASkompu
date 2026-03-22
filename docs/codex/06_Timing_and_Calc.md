@@ -1,0 +1,3 @@
+# Aikalaskenta
+
+TIME, SPEED, TK

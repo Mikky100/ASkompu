@@ -1,0 +1,3 @@
+# Pisteet
+
+Jakso- ja kokonaispisteet
