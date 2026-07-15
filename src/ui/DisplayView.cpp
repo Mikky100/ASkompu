@@ -42,6 +42,10 @@ void DisplayView::begin() {
   digitalWrite(TFT_BL, TFT_BACKLIGHT_ON);
 #endif
 
+  showDriveScreen();
+}
+
+void DisplayView::showDriveScreen() {
   display_.fillScreen(TFT_BLACK);
   display_.drawFastHLine(0, SPEED_AREA_HEIGHT - 1,
                          BoardConfig::DISPLAY_WIDTH, TFT_DARKGREY);
@@ -50,6 +54,14 @@ void DisplayView::begin() {
   display_.drawFastVLine(BoardConfig::DISPLAY_WIDTH / 2,
                          DIAGNOSTIC_AREA_TOP, DIAGNOSTIC_AREA_HEIGHT - 1,
                          TFT_DARKGREY);
+
+  displayedSpeedTenths_ = UINT32_MAX;
+  displayedTotalPulses_ = UINT32_MAX;
+  displayedTripDistanceMm_ = UINT64_MAX;
+  calibrationInitialized_ = false;
+  for (uint8_t index = 0; index < toIndex(ButtonIndicator::Count); ++index) {
+    buttonStateInitialized_[index] = false;
+  }
 }
 
 void DisplayView::showSpeed(float speedKmh) {
@@ -122,6 +134,41 @@ void DisplayView::showDiagnostics(uint32_t totalPulses,
                       DIAGNOSTIC_AREA_TOP + 23, 2);
   display_.drawString(tripText, BoardConfig::DISPLAY_WIDTH * 3 / 4,
                       DIAGNOSTIC_AREA_TOP + 23, 2);
+}
+
+void DisplayView::showCalibration(uint32_t millimetersPerPulse,
+                                  bool saveFailed) {
+  if (calibrationInitialized_ &&
+      millimetersPerPulse == displayedCalibration_ &&
+      saveFailed == displayedSaveFailed_) {
+    return;
+  }
+  displayedCalibration_ = millimetersPerPulse;
+  displayedSaveFailed_ = saveFailed;
+  calibrationInitialized_ = true;
+
+  char valueText[32];
+  std::snprintf(valueText, sizeof(valueText), "%lu mm/pulssi",
+                static_cast<unsigned long>(millimetersPerPulse));
+
+  display_.fillScreen(TFT_BLACK);
+  display_.setTextDatum(TC_DATUM);
+  display_.setTextSize(1);
+  display_.setTextColor(TFT_CYAN, TFT_BLACK);
+  display_.drawString("KALIBROINTI", BoardConfig::DISPLAY_WIDTH / 2, 10, 2);
+
+  display_.setTextDatum(MC_DATUM);
+  display_.setTextSize(2);
+  display_.setTextColor(TFT_WHITE, TFT_BLACK);
+  display_.drawString(valueText, BoardConfig::DISPLAY_WIDTH / 2, 68, 2);
+
+  display_.setTextSize(1);
+  display_.setTextColor(saveFailed ? TFT_RED : TFT_LIGHTGREY, TFT_BLACK);
+  display_.drawString(saveFailed ? "TALLENNUSVIRHE" : "YLOS/ALAS  +/- 1",
+                      BoardConfig::DISPLAY_WIDTH / 2, 112, 1);
+  display_.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+  display_.drawString("VASEN PERUUTA   OIKEA TALLENNA",
+                      BoardConfig::DISPLAY_WIDTH / 2, 142, 1);
 }
 
 void DisplayView::showButtonState(ButtonIndicator indicator, bool pressed) {

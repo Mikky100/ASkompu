@@ -17,8 +17,10 @@ enum class ButtonIndicator : uint8_t {
 class DisplayView {
  public:
   void begin();
+  void showDriveScreen();
   void showSpeed(float speedKmh);
   void showDiagnostics(uint32_t totalPulses, uint64_t tripDistanceMm);
+  void showCalibration(uint32_t millimetersPerPulse, bool saveFailed);
   void showButtonState(ButtonIndicator indicator, bool pressed);
 
  private:
@@ -28,6 +30,9 @@ class DisplayView {
   uint32_t displayedSpeedTenths_ = UINT32_MAX;
   uint32_t displayedTotalPulses_ = UINT32_MAX;
   uint64_t displayedTripDistanceMm_ = UINT64_MAX;
+  uint32_t displayedCalibration_ = UINT32_MAX;
+  bool displayedSaveFailed_ = false;
+  bool calibrationInitialized_ = false;
   bool displayedButtonStates_[static_cast<uint8_t>(ButtonIndicator::Count)]{};
   bool buttonStateInitialized_[static_cast<uint8_t>(ButtonIndicator::Count)]{};
 };
