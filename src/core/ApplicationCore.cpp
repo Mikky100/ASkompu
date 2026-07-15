@@ -15,30 +15,25 @@ struct MenuItem {
 };
 
 constexpr MenuItem MAIN_ITEMS[] = {
-    {"AJOMAARAYS JA PISTEVALIT", true},
-    {"KILPAILUTYYPPI JA JAT", true},
-    {"KELLONAIKA JA LAHTOAIKA", true},
-    {"MITTARIKERROIN JA MITTIS", true},
+    {"AJOMAARAYS", true},
+    {"KELLO", true},
+    {"KERROIN", true},
     {"PISTEET JA TAPAHTUMAT", true},
     {"NAYTTOASETUKSET", true},
     {"TRIPIT", true},
     {"JARJESTELMA", true},
 };
-constexpr MenuItem ORDER_ITEMS[] = {{"AJOMAARAYS", false},
-                                    {"PISTEVALIT", false}};
-constexpr MenuItem COMPETITION_ITEMS[] = {{"KILPAILUTYYPPI", false},
-                                          {"JAT-TYYPIT", false}};
-constexpr MenuItem TIME_ITEMS[] = {{"KELLONAIKA", true},
-                                   {"LAHTOAJAN KORJAUS", false}};
-constexpr MenuItem CALIBRATION_ITEMS[] = {{"MITTARIKERROIN", true},
-                                          {"MITTIS", false}};
 constexpr MenuItem RESULT_ITEMS[] = {{"JAKSOJEN PISTEET", false},
                                      {"KOKONAISPISTEET", false},
                                      {"TAPAHTUMAT", false}};
 constexpr MenuItem DISPLAY_ITEMS[] = {{"NAYTTOPROFIILI", false},
                                       {"NAYTTOSELITTEET", false},
                                       {"AIKAERON MUOTO", false},
-                                      {"TRIP-TARKKUUS", false}};
+                                      {"TRIP-TARKKUUS", false},
+                                      {"TEKSTIN VARI", true}};
+constexpr MenuItem TEXT_COLOR_ITEMS[] = {{"VALKOINEN", true},
+                                         {"PUNAINEN", true},
+                                         {"VIHREA", true}};
 constexpr MenuItem TRIP_ITEMS[] = {{"NOLLAA TRIP 1", true},
                                    {"NOLLAA TRIP 2", true},
                                    {"ULKOINEN TRIP", false}};
@@ -57,22 +52,6 @@ const MenuItem* itemsFor(MenuPage page, uint8_t& count, const char*& title) {
       title = "PAAVALIKKO";
       count = countOf(MAIN_ITEMS);
       return MAIN_ITEMS;
-    case MenuPage::Order:
-      title = "AJOMAARAYS";
-      count = countOf(ORDER_ITEMS);
-      return ORDER_ITEMS;
-    case MenuPage::Competition:
-      title = "KILPAILU";
-      count = countOf(COMPETITION_ITEMS);
-      return COMPETITION_ITEMS;
-    case MenuPage::Time:
-      title = "KELLO JA LAHTOAIKA";
-      count = countOf(TIME_ITEMS);
-      return TIME_ITEMS;
-    case MenuPage::Calibration:
-      title = "KALIBROINTI";
-      count = countOf(CALIBRATION_ITEMS);
-      return CALIBRATION_ITEMS;
     case MenuPage::Results:
       title = "PISTEET JA LOKI";
       count = countOf(RESULT_ITEMS);
@@ -81,6 +60,10 @@ const MenuItem* itemsFor(MenuPage page, uint8_t& count, const char*& title) {
       title = "NAYTTO";
       count = countOf(DISPLAY_ITEMS);
       return DISPLAY_ITEMS;
+    case MenuPage::TextColor:
+      title = "TEKSTIN VARI";
+      count = countOf(TEXT_COLOR_ITEMS);
+      return TEXT_COLOR_ITEMS;
     case MenuPage::Trips:
       title = "TRIPIT";
       count = countOf(TRIP_ITEMS);
@@ -164,6 +147,12 @@ void ApplicationCore::handleButton(const ButtonEvent& event) {
 
   if (event.eventType == ButtonEventType::LongStart &&
       event.buttonId == ButtonId::Left &&
+      screen_ == Screen::OrderEdit) {
+    handleOrderEditor(event);
+    return;
+  }
+  if (event.eventType == ButtonEventType::LongStart &&
+      event.buttonId == ButtonId::Left &&
       screen_ != Screen::StartupTimeEntry) {
     screen_ = Screen::BasicView;
     menuPage_ = MenuPage::Main;
@@ -185,6 +174,9 @@ void ApplicationCore::handleButton(const ButtonEvent& event) {
       break;
     case Screen::CalibrationEdit:
       handleCalibration(event);
+      break;
+    case Screen::OrderEdit:
+      handleOrderEditor(event);
       break;
     case Screen::Diagnostics:
       if (event.eventType == ButtonEventType::Press &&
@@ -218,14 +210,14 @@ void ApplicationCore::handleTimeEntry(const ButtonEvent& event) {
       if (startupTimeEdit_) {
         screen_ = Screen::BasicView;
       } else {
-        openSubmenu(MenuPage::Time);
+        openMainMenu(1);
       }
     }
   } else if (event.buttonId == ButtonId::Left) {
     if (activeTimeField_ == TimeField::Minute) {
       activeTimeField_ = TimeField::Hour;
     } else if (!startupTimeEdit_) {
-      openSubmenu(MenuPage::Time);
+      openMainMenu(1);
     }
   }
 }
@@ -263,6 +255,8 @@ void ApplicationCore::handleMenu(const ButtonEvent& event) {
              event.buttonId == ButtonId::Left) {
     if (menuPage_ == MenuPage::Main) {
       screen_ = Screen::BasicView;
+    } else if (menuPage_ == MenuPage::TextColor) {
+      openSubmenu(MenuPage::Display);
     } else {
       openMainMenu(mainMenuSelectedIndex_);
     }
@@ -287,16 +281,48 @@ void ApplicationCore::handleCalibration(const ButtonEvent& event) {
              event.buttonId == ButtonId::Left) {
     calibrationSavePending_ = false;
     calibrationSaveFailed_ = false;
-    openSubmenu(MenuPage::Calibration);
+    openMainMenu(2);
   } else if (event.eventType == ButtonEventType::Press &&
              event.buttonId == ButtonId::Right &&
              !calibrationSaveInFlight_) {
     if (editedMillimetersPerPulse_ == millimetersPerPulse_) {
-      openSubmenu(MenuPage::Calibration);
+      openMainMenu(2);
     } else {
       calibrationSavePending_ = true;
       calibrationSaveFailed_ = false;
     }
+  }
+}
+
+void ApplicationCore::handleOrderEditor(const ButtonEvent& event) {
+  const bool step = event.eventType == ButtonEventType::Press ||
+                    event.eventType == ButtonEventType::LongRepeat;
+  const bool longPress = event.eventType == ButtonEventType::LongStart &&
+                         (event.buttonId == ButtonId::Left ||
+                          event.buttonId == ButtonId::Right);
+  if (!step && !longPress) return;
+  route::EditorKey key;
+  switch (event.buttonId) {
+    case ButtonId::Up:
+      key = route::EditorKey::UP;
+      break;
+    case ButtonId::Down:
+      key = route::EditorKey::DOWN;
+      break;
+    case ButtonId::Left:
+      key = route::EditorKey::LEFT;
+      break;
+    case ButtonId::Right:
+      key = route::EditorKey::RIGHT;
+      break;
+    default:
+      return;
+  }
+  const route::EditorResult result = routeOrderEditor_.handle(key, longPress);
+  if (result == route::EditorResult::EXIT) {
+    openMainMenu(0);
+  } else if (result == route::EditorResult::SAVE_REQUESTED) {
+    routeOrderSavePending_ = true;
   }
 }
 
@@ -324,17 +350,36 @@ void ApplicationCore::activateMenuItem() {
   }
   if (menuPage_ == MenuPage::Main) {
     mainMenuSelectedIndex_ = menuSelectedIndex_;
-    openSubmenu(static_cast<MenuPage>(menuSelectedIndex_ + 1));
+    if (menuSelectedIndex_ == 0) {
+      if (hasRouteOrder_)
+        routeOrderEditor_.beginBrowse(currentRouteOrder_);
+      else
+        routeOrderEditor_.beginCreate();
+      screen_ = Screen::OrderEdit;
+      return;
+    }
+    if (menuSelectedIndex_ == 1) {
+      beginTimeEdit(false);
+      return;
+    }
+    if (menuSelectedIndex_ == 2) {
+      editedMillimetersPerPulse_ = millimetersPerPulse_;
+      calibrationSaveFailed_ = false;
+      calibrationSavePending_ = false;
+      screen_ = Screen::CalibrationEdit;
+      return;
+    }
+    static const MenuPage PAGES[] = {MenuPage::Results, MenuPage::Display,
+                                     MenuPage::Trips, MenuPage::System};
+    openSubmenu(PAGES[menuSelectedIndex_ - 3]);
     return;
   }
-  if (menuPage_ == MenuPage::Time && menuSelectedIndex_ == 0) {
-    beginTimeEdit(false);
-  } else if (menuPage_ == MenuPage::Calibration &&
-             menuSelectedIndex_ == 0) {
-    editedMillimetersPerPulse_ = millimetersPerPulse_;
-    calibrationSaveFailed_ = false;
-    calibrationSavePending_ = false;
-    screen_ = Screen::CalibrationEdit;
+  if (menuPage_ == MenuPage::Display && menuSelectedIndex_ == 4) {
+    openSubmenu(MenuPage::TextColor);
+    menuSelectedIndex_ = static_cast<uint8_t>(textColor_);
+  } else if (menuPage_ == MenuPage::TextColor) {
+    editedTextColor_ = static_cast<domain::TextColor>(menuSelectedIndex_);
+    textColorSavePending_ = true;
   } else if (menuPage_ == MenuPage::Trips) {
     if (menuSelectedIndex_ == 0) {
       resetTrip1();
@@ -406,6 +451,7 @@ void ApplicationCore::tick(uint32_t nowUs) {
 DisplayModel ApplicationCore::displayModel() const {
   DisplayModel model{};
   model.screen = screen_;
+  model.textColor = textColor_;
   model.clock = clock_.isSet() ? clock_.now() : ClockTime{0, 0, 0};
   model.speedKmh = speedCalculator_.speedKmh();
   model.trip1 = {trip1DistanceMm_, true};
@@ -413,6 +459,20 @@ DisplayModel ApplicationCore::displayModel() const {
   model.timeEntry = {editedHour_, editedMinute_, activeTimeField_,
                      startupTimeEdit_};
   model.calibration = {editedMillimetersPerPulse_, calibrationSaveFailed_};
+  model.order.editor = routeOrderEditor_.view();
+  model.order.hasSelectedSegment = false;
+  model.order.showsStartTime = false;
+  if (screen_ == Screen::OrderEdit &&
+      model.order.editor.phase == route::EditorPhase::BROWSE) {
+    if (model.order.editor.selectedSegment == 0) {
+      model.order.showsStartTime = true;
+    } else if (model.order.editor.selectedSegment <=
+               routeOrderEditor_.draft().segments.size()) {
+      model.order.selectedSegment = routeOrderEditor_.draft().segments[
+          model.order.editor.selectedSegment - 1];
+      model.order.hasSelectedSegment = true;
+    }
+  }
 
   if (screen_ == Screen::Menu) {
     uint8_t count = 0;
@@ -484,10 +544,59 @@ void ApplicationCore::completeCalibrationSave(bool succeeded) {
     millimetersPerPulse_ = editedMillimetersPerPulse_;
     speedCalculator_.setMillimetersPerPulse(millimetersPerPulse_);
     calibrationSaveFailed_ = false;
-    openSubmenu(MenuPage::Calibration);
+    openMainMenu(2);
   } else {
     calibrationSaveFailed_ = true;
   }
+}
+
+void ApplicationCore::setInitialTextColor(domain::TextColor color) {
+  textColor_ = domain::isValidTextColor(color) ? color : domain::TextColor::WHITE;
+  editedTextColor_ = textColor_;
+}
+
+bool ApplicationCore::takeTextColorSaveRequest(domain::TextColor& color) {
+  if (!textColorSavePending_ || textColorSaveInFlight_) return false;
+  textColorSavePending_ = false;
+  textColorSaveInFlight_ = true;
+  color = editedTextColor_;
+  return true;
+}
+
+void ApplicationCore::completeTextColorSave(bool succeeded) {
+  if (!textColorSaveInFlight_) return;
+  textColorSaveInFlight_ = false;
+  if (succeeded) textColor_ = editedTextColor_;
+  openSubmenu(MenuPage::Display);
+  menuSelectedIndex_ = 4;
+  updateMenuScroll();
+}
+
+void ApplicationCore::setInitialRouteOrder(const domain::RouteOrder& order) {
+  if (domain::validateRouteOrder(order) ==
+      domain::RouteOrderValidationError::NONE) {
+    currentRouteOrder_ = order;
+    hasRouteOrder_ = true;
+  }
+}
+
+bool ApplicationCore::takeRouteOrderSaveRequest(
+    const domain::RouteOrder*& order) {
+  if (!routeOrderSavePending_ || routeOrderSaveInFlight_) return false;
+  routeOrderSavePending_ = false;
+  routeOrderSaveInFlight_ = true;
+  order = &routeOrderEditor_.draft();
+  return true;
+}
+
+void ApplicationCore::completeRouteOrderSave(bool succeeded) {
+  if (!routeOrderSaveInFlight_) return;
+  routeOrderSaveInFlight_ = false;
+  if (succeeded) {
+    currentRouteOrder_ = routeOrderEditor_.draft();
+    hasRouteOrder_ = true;
+  }
+  routeOrderEditor_.completeSave(succeeded);
 }
 
 void ApplicationCore::addDistance(uint64_t incrementMillimeters,

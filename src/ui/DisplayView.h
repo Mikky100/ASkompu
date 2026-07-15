@@ -18,10 +18,12 @@ class DisplayView {
   void showTimeEntry(const core::TimeEntryDisplayModel& model);
   void showMenu(const core::MenuDisplayModel& model);
   void showCalibration(const core::CalibrationDisplayModel& model);
+  void showOrder(const core::OrderDisplayModel& model);
   void showDiagnostics(const core::DiagnosticsDisplayModel& model);
 
   TFT_eSPI display_;
   TFT_eSprite canvas_;
+  uint16_t textColor_ = TFT_WHITE;
 };
 
 }  // namespace ui

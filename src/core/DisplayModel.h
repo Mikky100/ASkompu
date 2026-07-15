@@ -3,6 +3,8 @@
 #include <cstdint>
 
 #include "Clock.h"
+#include "domain/DisplaySetting.h"
+#include "route/RouteOrderEditor.h"
 
 namespace core {
 
@@ -12,6 +14,7 @@ enum class Screen : uint8_t {
   Menu,
   TimeEdit,
   CalibrationEdit,
+  OrderEdit,
   Diagnostics,
 };
 
@@ -32,6 +35,13 @@ struct TimeEntryDisplayModel {
 struct CalibrationDisplayModel {
   uint32_t editedMillimetersPerPulse;
   bool saveFailed;
+};
+
+struct OrderDisplayModel {
+  route::RouteOrderEditorView editor;
+  domain::SegmentDefinition selectedSegment;
+  bool hasSelectedSegment;
+  bool showsStartTime;
 };
 
 constexpr uint8_t MENU_VISIBLE_ROWS = 5;
@@ -72,12 +82,14 @@ struct DiagnosticsDisplayModel {
 
 struct DisplayModel {
   Screen screen;
+  domain::TextColor textColor;
   ClockTime clock;
   float speedKmh;
   TripDisplayModel trip1;
   TripDisplayModel trip2;
   TimeEntryDisplayModel timeEntry;
   CalibrationDisplayModel calibration;
+  OrderDisplayModel order;
   MenuDisplayModel menu;
   DiagnosticsDisplayModel diagnostics;
 };

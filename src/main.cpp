@@ -8,6 +8,7 @@
 #include "input/PulseInput.h"
 #include "ports/ArduinoClock.h"
 #include "settings/SettingsRepository.h"
+#include "settings/PreferencesRouteOrderStore.h"
 #include "ui/DisplayView.h"
 
 namespace {
@@ -30,7 +31,9 @@ input::DebouncedButton downButton(BoardConfig::PIN_BUTTON_DOWN,
                                   CalibrationConfig::REPEAT_INTERVAL_MS);
 input::DebouncedButton rightButton(BoardConfig::PIN_BUTTON_RIGHT,
                                    BoardConfig::BUTTON_PRESSED_LEVEL,
-                                   DEBOUNCE_MS);
+                                   DEBOUNCE_MS,
+                                   CalibrationConfig::LONG_PRESS_DELAY_MS,
+                                   0);
 input::DebouncedButton tripResetButton(BoardConfig::PIN_BUTTON_TRIP_RESET,
                                        BoardConfig::BUTTON_PRESSED_LEVEL,
                                        DEBOUNCE_MS);
@@ -44,6 +47,7 @@ core::ApplicationCore application(
     softwareClock, CalibrationConfig::DEFAULT_MILLIMETERS_PER_PULSE,
     DemoConfig::zeroSpeedTimeoutUs);
 settings::SettingsRepository settingsRepository;
+settings::PreferencesRouteOrderStore routeOrderStore;
 ui::DisplayView view;
 uint32_t lastDisplayUpdateMs = 0;
 core::Screen renderedScreen = core::Screen::StartupTimeEntry;
@@ -72,9 +76,18 @@ void setup() {
   const settings::CalibrationLoadResult calibration =
       settingsRepository.loadCalibration();
   application.setInitialMillimetersPerPulse(calibration.millimetersPerPulse);
+  const settings::TextColorLoadResult textColor =
+      settingsRepository.loadTextColor();
+  application.setInitialTextColor(textColor.color);
   Serial.printf("Calibration: %lu mm/pulse%s\n",
                 static_cast<unsigned long>(calibration.millimetersPerPulse),
                 calibration.usedDefault ? " (default)" : " (NVS)");
+  domain::RouteOrder routeOrder;
+  if (routeOrderStore.load(routeOrder)) {
+    application.setInitialRouteOrder(routeOrder);
+    Serial.printf("Route order: %u segments (NVS)\n",
+                  static_cast<unsigned>(routeOrder.segments.size()));
+  }
 
   leftButton.begin();
   upButton.begin();
@@ -130,6 +143,19 @@ void loop() {
       Serial.printf("Saved calibration: %lu mm/pulse\n",
                     static_cast<unsigned long>(calibrationToSave));
     }
+  }
+
+  domain::TextColor textColorToSave = domain::TextColor::WHITE;
+  if (application.takeTextColorSaveRequest(textColorToSave)) {
+    application.completeTextColorSave(
+        settingsRepository.saveTextColor(textColorToSave));
+  }
+
+  const domain::RouteOrder* orderToSave = nullptr;
+  if (application.takeRouteOrderSaveRequest(orderToSave)) {
+    const bool saved = orderToSave && routeOrderStore.replace(*orderToSave);
+    application.completeRouteOrderSave(saved);
+    Serial.printf("Route order save: %s\n", saved ? "ok" : "failed");
   }
 
   const core::DisplayModel displayModel = application.displayModel();

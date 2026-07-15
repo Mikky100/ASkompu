@@ -6,17 +6,17 @@
 #include "Clock.h"
 #include "DisplayModel.h"
 #include "domain/SpeedCalculator.h"
+#include "domain/RouteOrder.h"
+#include "domain/DisplaySetting.h"
+#include "route/RouteOrderEditor.h"
 
 namespace core {
 
 enum class MenuPage : uint8_t {
   Main,
-  Order,
-  Competition,
-  Time,
-  Calibration,
   Results,
   Display,
+  TextColor,
   Trips,
   System,
 };
@@ -35,6 +35,16 @@ class ApplicationCore {
 
   bool takeCalibrationSaveRequest(uint32_t& millimetersPerPulse);
   void completeCalibrationSave(bool succeeded);
+  void setInitialRouteOrder(const domain::RouteOrder& order);
+  bool takeRouteOrderSaveRequest(const domain::RouteOrder*& order);
+  void completeRouteOrderSave(bool succeeded);
+  void setInitialTextColor(domain::TextColor color);
+  bool takeTextColorSaveRequest(domain::TextColor& color);
+  void completeTextColorSave(bool succeeded);
+  bool hasRouteOrder() const { return hasRouteOrder_; }
+  const domain::RouteOrder* currentRouteOrder() const {
+    return hasRouteOrder_ ? &currentRouteOrder_ : nullptr;
+  }
 
   uint64_t trip1DistanceMillimeters() const { return trip1DistanceMm_; }
   uint64_t trip2DistanceMillimeters() const { return trip2DistanceMm_; }
@@ -50,6 +60,7 @@ class ApplicationCore {
   void handleBasicView(const ButtonEvent& event);
   void handleMenu(const ButtonEvent& event);
   void handleCalibration(const ButtonEvent& event);
+  void handleOrderEditor(const ButtonEvent& event);
   void openMainMenu(uint8_t selectedIndex);
   void openSubmenu(MenuPage page);
   void activateMenuItem();
@@ -66,6 +77,10 @@ class ApplicationCore {
   uint32_t zeroSpeedTimeoutUs_;
   uint32_t millimetersPerPulse_;
   uint32_t editedMillimetersPerPulse_;
+  domain::TextColor textColor_ = domain::TextColor::WHITE;
+  domain::TextColor editedTextColor_ = domain::TextColor::WHITE;
+  bool textColorSavePending_ = false;
+  bool textColorSaveInFlight_ = false;
   uint64_t trip1DistanceMm_ = 0;
   uint64_t trip2DistanceMm_ = 0;
   uint64_t totalPulseCount_ = 0;
@@ -75,6 +90,11 @@ class ApplicationCore {
   bool calibrationSaveFailed_ = false;
   bool calibrationSavePending_ = false;
   bool calibrationSaveInFlight_ = false;
+  bool hasRouteOrder_ = false;
+  bool routeOrderSavePending_ = false;
+  bool routeOrderSaveInFlight_ = false;
+  domain::RouteOrder currentRouteOrder_;
+  route::RouteOrderEditor routeOrderEditor_;
   Screen screen_ = Screen::StartupTimeEntry;
   MenuPage menuPage_ = MenuPage::Main;
   uint8_t mainMenuSelectedIndex_ = 0;

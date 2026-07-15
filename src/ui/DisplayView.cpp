@@ -20,6 +20,36 @@ void formatTrip(char* text, size_t size, uint64_t distanceMm) {
   }
 }
 
+void formatEditableValue(char* text, size_t size,
+                         const route::RouteOrderEditorView& editor) {
+  char digits[12]{};
+  uint8_t count = 0;
+  if (editor.segmentType == domain::SegmentType::TIME ||
+      editor.enteringMittisTime) {
+    std::snprintf(digits, sizeof(digits), "%02lu%02lu",
+                  static_cast<unsigned long>(editor.value / 60),
+                  static_cast<unsigned long>(editor.value % 60));
+    count = 4;
+  } else if (editor.segmentType == domain::SegmentType::SPEED) {
+    std::snprintf(digits, sizeof(digits), "%02lu",
+                  static_cast<unsigned long>(editor.value));
+    count = 2;
+  } else {
+    std::snprintf(digits, sizeof(digits), "%04lu",
+                  static_cast<unsigned long>(editor.value));
+    count = 4;
+  }
+  size_t output = 0;
+  for (uint8_t index = 0; index < count && output + 4 < size; ++index) {
+    if (index == editor.digitCursor) text[output++] = '[';
+    text[output++] = digits[index];
+    if (index == editor.digitCursor) text[output++] = ']';
+    if (editor.segmentType == domain::SegmentType::TIME && index == 1)
+      text[output++] = ':';
+  }
+  text[output] = '\0';
+}
+
 }  // namespace
 
 DisplayView::DisplayView() : canvas_(&display_) {}
@@ -38,6 +68,18 @@ void DisplayView::begin() {
 }
 
 void DisplayView::render(const core::DisplayModel& model) {
+  switch (model.textColor) {
+    case domain::TextColor::RED:
+      textColor_ = TFT_RED;
+      break;
+    case domain::TextColor::GREEN:
+      textColor_ = TFT_GREEN;
+      break;
+    case domain::TextColor::WHITE:
+    default:
+      textColor_ = TFT_WHITE;
+      break;
+  }
   canvas_.fillSprite(TFT_BLACK);
   canvas_.setTextSize(1);
   switch (model.screen) {
@@ -53,6 +95,9 @@ void DisplayView::render(const core::DisplayModel& model) {
       break;
     case core::Screen::CalibrationEdit:
       showCalibration(model.calibration);
+      break;
+    case core::Screen::OrderEdit:
+      showOrder(model.order);
       break;
     case core::Screen::Diagnostics:
       showDiagnostics(model.diagnostics);
@@ -82,7 +127,7 @@ void DisplayView::showBasicView(const core::DisplayModel& model) {
   canvas_.setTextColor(TFT_CYAN, TFT_BLACK);
   canvas_.drawString("TRIP 1", 8, 38, 2);
   canvas_.setTextDatum(ML_DATUM);
-  canvas_.setTextColor(TFT_WHITE, TFT_BLACK);
+  canvas_.setTextColor(textColor_, TFT_BLACK);
   canvas_.setTextSize(2);
   canvas_.drawString(trip1Text, 8, 83, 2);
   canvas_.setTextSize(1);
@@ -92,7 +137,7 @@ void DisplayView::showBasicView(const core::DisplayModel& model) {
   canvas_.setTextColor(TFT_CYAN, TFT_BLACK);
   canvas_.drawString("TRIP 2", 8, 162, 2);
   canvas_.setTextDatum(BR_DATUM);
-  canvas_.setTextColor(TFT_WHITE, TFT_BLACK);
+  canvas_.setTextColor(textColor_, TFT_BLACK);
   canvas_.drawString(trip2Text, BoardConfig::DISPLAY_WIDTH - 8, 162, 2);
 }
 
@@ -108,16 +153,16 @@ void DisplayView::showTimeEntry(const core::TimeEntryDisplayModel& model) {
   canvas_.setTextSize(3);
   canvas_.setTextDatum(MR_DATUM);
   canvas_.setTextColor(model.activeField == core::TimeField::Hour ? TFT_YELLOW
-                                                                  : TFT_WHITE,
+                                                                  : textColor_,
                        TFT_BLACK);
   canvas_.drawString(hour, 145, 78, 2);
   canvas_.setTextDatum(MC_DATUM);
-  canvas_.setTextColor(TFT_WHITE, TFT_BLACK);
+  canvas_.setTextColor(textColor_, TFT_BLACK);
   canvas_.drawString(":", 160, 78, 2);
   canvas_.setTextDatum(ML_DATUM);
   canvas_.setTextColor(model.activeField == core::TimeField::Minute
                            ? TFT_YELLOW
-                           : TFT_WHITE,
+                           : textColor_,
                        TFT_BLACK);
   canvas_.drawString(minute, 175, 78, 2);
   canvas_.setTextSize(1);
@@ -139,7 +184,7 @@ void DisplayView::showMenu(const core::MenuDisplayModel& model) {
                      BoardConfig::DISPLAY_WIDTH - 10, rowHeight - 2,
                      background);
     canvas_.setTextDatum(ML_DATUM);
-    canvas_.setTextColor(model.rows[row].enabled ? TFT_WHITE : TFT_DARKGREY,
+    canvas_.setTextColor(model.rows[row].enabled ? textColor_ : TFT_DARKGREY,
                          background);
     canvas_.drawString(model.rows[row].label, 13,
                        top + row * rowHeight + rowHeight / 2, 2);
@@ -167,7 +212,7 @@ void DisplayView::showCalibration(
   canvas_.drawString("MITTARIKERROIN", BoardConfig::DISPLAY_WIDTH / 2, 10, 2);
   canvas_.setTextDatum(MC_DATUM);
   canvas_.setTextSize(2);
-  canvas_.setTextColor(TFT_WHITE, TFT_BLACK);
+  canvas_.setTextColor(textColor_, TFT_BLACK);
   canvas_.drawString(valueText, BoardConfig::DISPLAY_WIDTH / 2, 75, 2);
   canvas_.setTextSize(1);
   canvas_.setTextColor(model.saveFailed ? TFT_RED : TFT_LIGHTGREY, TFT_BLACK);
@@ -178,13 +223,145 @@ void DisplayView::showCalibration(
                      BoardConfig::DISPLAY_WIDTH / 2, 148, 1);
 }
 
+void DisplayView::showOrder(const core::OrderDisplayModel& model) {
+  const route::RouteOrderEditorView& editor = model.editor;
+  const char* title = "AJOMAARAYS";
+  const char* primary = "";
+  char value[48]{};
+  switch (editor.phase) {
+    case route::EditorPhase::COMPETITION_TYPE:
+      title = "KILPAILUTYYPPI";
+      primary = editor.competitionType == domain::CompetitionType::EMIT
+                    ? "EMIT"
+                    : "NON-EMIT";
+      break;
+    case route::EditorPhase::START_TIME:
+      title = "KILPAILUN LAHTOAIKA";
+      if (editor.startTimeField == 0)
+        std::snprintf(value, sizeof(value), "[%02u]:%02u", editor.startHour,
+                      editor.startMinute);
+      else
+        std::snprintf(value, sizeof(value), "%02u:[%02u]", editor.startHour,
+                      editor.startMinute);
+      primary = value;
+      break;
+    case route::EditorPhase::SEGMENT_TYPE:
+      title = editor.editingExisting ? "MUOKKAA PISTEVALIA" : "MAARAYSTYYPPI";
+      primary = editor.segmentType == domain::SegmentType::TIME
+                    ? "AIKA"
+                    : (editor.segmentType == domain::SegmentType::SPEED
+                           ? "NOPEUS"
+                           : "MITTIS");
+      break;
+    case route::EditorPhase::VALUE:
+      title = editor.segmentType == domain::SegmentType::TIME
+                  ? "AIKA"
+                  : (editor.segmentType == domain::SegmentType::SPEED
+                         ? "NOPEUS"
+                         : (editor.enteringMittisTime ? "MITTIS AIKA"
+                                                      : "MITTIS METRIA"));
+      formatEditableValue(value, sizeof(value), editor);
+      primary = value;
+      break;
+    case route::EditorPhase::CONTINUATION: {
+      static const char* ACTIONS[] = {"SEURAAVA", "JAT", "MAALI"};
+      title = "JATKOTOIMINTO";
+      primary = ACTIONS[editor.continuation];
+      break;
+    }
+    case route::EditorPhase::JAT_TYPE:
+      title = "JAT-TYYPPI";
+      switch (editor.jatType) {
+        case domain::JatType::MANNED_JAT: primary = "MANNED JAT"; break;
+        case domain::JatType::EMIT_JAT_OFFSET: primary = "JAT+AIKA"; break;
+        case domain::JatType::EMIT_MLA: primary = "JAT+MLA"; break;
+        case domain::JatType::EMIT_ULA: primary = "JAT+ULA"; break;
+      }
+      break;
+    case route::EditorPhase::JAT_OFFSET:
+      title = "JAT LISAAIKA";
+      std::snprintf(value, sizeof(value), "%+d min", editor.jatOffsetMinutes);
+      primary = value;
+      break;
+    case route::EditorPhase::BROWSE:
+      title = "AJOMAARAYS";
+      if (model.showsStartTime) {
+        std::snprintf(value, sizeof(value), "LAHTO %02u:%02u",
+                      editor.startHour, editor.startMinute);
+        primary = value;
+      } else if (model.hasSelectedSegment) {
+        const domain::SegmentDefinition& segment = model.selectedSegment;
+        char startPoint[8];
+        char endPoint[8];
+        if (segment.startPointIndex == 0)
+          std::snprintf(startPoint, sizeof(startPoint), "L");
+        else if (segment.segmentType == domain::SegmentType::MITTIS)
+          std::snprintf(value, sizeof(value), "%s-%s MITTIS %lum %lu:%02lu",
+                        startPoint, endPoint,
+                        static_cast<unsigned long>(segment.value),
+                        static_cast<unsigned long>(
+                            segment.mittisDurationSeconds / 60),
+                        static_cast<unsigned long>(
+                            segment.mittisDurationSeconds % 60));
+        else
+          std::snprintf(startPoint, sizeof(startPoint), "%u",
+                        segment.startPointIndex);
+        if (segment.pointTypeAtEnd == domain::PointType::FINISH_M)
+          std::snprintf(endPoint, sizeof(endPoint), "M");
+        else
+          std::snprintf(endPoint, sizeof(endPoint), "%u",
+                        segment.endPointIndex);
+        const char* type = segment.segmentType == domain::SegmentType::TIME
+                               ? "AIKA"
+                               : (segment.segmentType == domain::SegmentType::SPEED
+                                      ? "NOPEUS"
+                                      : "MITTIS");
+        if (segment.segmentType == domain::SegmentType::TIME)
+          std::snprintf(value, sizeof(value), "%s-%s %s %lu:%02lu",
+                        startPoint, endPoint, type,
+                        static_cast<unsigned long>(segment.value / 60),
+                        static_cast<unsigned long>(segment.value % 60));
+        else
+          std::snprintf(value, sizeof(value), "%s-%s %s %lu",
+                        startPoint, endPoint, type,
+                        static_cast<unsigned long>(segment.value));
+        primary = value;
+      }
+      break;
+    case route::EditorPhase::CANCEL_PROMPT:
+      title = "KESKEYTETAANKO?";
+      primary = "VASEN EI   OIKEA KYLLA";
+      break;
+    case route::EditorPhase::REPLACE_PROMPT:
+      title = "UUSI AJOMAARAYS?";
+      primary = "VASEN EI   OIKEA KYLLA";
+      break;
+    case route::EditorPhase::SAVE_PENDING:
+      title = "TALLENNETAAN";
+      primary = "ODOTA";
+      break;
+  }
+  canvas_.setTextDatum(TC_DATUM);
+  canvas_.setTextColor(TFT_CYAN, TFT_BLACK);
+  canvas_.drawString(title, BoardConfig::DISPLAY_WIDTH / 2, 10, 2);
+  canvas_.setTextDatum(MC_DATUM);
+  canvas_.setTextSize(2);
+  canvas_.setTextColor(editor.saveFailed ? TFT_RED : textColor_, TFT_BLACK);
+  canvas_.drawString(primary, BoardConfig::DISPLAY_WIDTH / 2, 78, 2);
+  canvas_.setTextSize(1);
+  canvas_.setTextColor(editor.saveFailed ? TFT_RED : TFT_LIGHTGREY, TFT_BLACK);
+  canvas_.drawString(editor.saveFailed ? "TALLENNUSVIRHE"
+                                       : "YLOS/ALAS   VASEN   OIKEA",
+                     BoardConfig::DISPLAY_WIDTH / 2, 150, 1);
+}
+
 void DisplayView::showDiagnostics(
     const core::DiagnosticsDisplayModel& model) {
   char line[48];
   canvas_.setTextDatum(TL_DATUM);
   canvas_.setTextColor(TFT_CYAN, TFT_BLACK);
   canvas_.drawString("DIAGNOSTIIKKA", 4, 2, 2);
-  canvas_.setTextColor(TFT_WHITE, TFT_BLACK);
+  canvas_.setTextColor(textColor_, TFT_BLACK);
   std::snprintf(line, sizeof(line), "L:%u U:%u D:%u R:%u GPIO14:%u",
                 model.buttonPressed[0], model.buttonPressed[1],
                 model.buttonPressed[2], model.buttonPressed[3],

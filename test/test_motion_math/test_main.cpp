@@ -12,6 +12,9 @@
 #include "domain/SpeedCalculator.h"
 #include "domain/TripCounter.h"
 #include "input/ButtonInterpreter.h"
+#include "route/RouteOrderCodec.h"
+#include "route/RouteOrderEditor.h"
+#include "route/RouteOrderStore.h"
 
 void setUp() {}
 void tearDown() {}
@@ -34,6 +37,30 @@ struct Fixture {
   FakeTimeSource timeSource;
   core::SoftwareClock clock;
   core::ApplicationCore application;
+};
+
+class MemoryRouteOrderStore : public route::RouteOrderStore {
+ public:
+  bool load(domain::RouteOrder& order) override {
+    if (!hasValue) return false;
+    order = stored;
+    return true;
+  }
+  bool replace(const domain::RouteOrder& order) override {
+    if (failReplace || domain::validateRouteOrder(order) !=
+                           domain::RouteOrderValidationError::NONE)
+      return false;
+    stored = order;
+    hasValue = true;
+    return true;
+  }
+  bool clear() override {
+    hasValue = false;
+    return true;
+  }
+  bool failReplace = false;
+  bool hasValue = false;
+  domain::RouteOrder stored;
 };
 
 core::ButtonEvent button(core::ButtonId id, core::ButtonEventType type,
@@ -83,6 +110,385 @@ void assertSpeed(uint32_t millimetersPerPulse, uint32_t intervalUs,
                                      ZERO_SPEED_TIMEOUT_US);
   calculator.update(intervalUs * 2, 2, intervalUs, intervalUs * 2);
   TEST_ASSERT_FLOAT_WITHIN(0.01F, expectedKmh, calculator.speedKmh());
+}
+
+domain::RouteOrder makeOrder(domain::CompetitionType competitionType,
+                             domain::SegmentType segmentType =
+                                 domain::SegmentType::TIME,
+                             uint32_t value = 60) {
+  domain::RouteOrder order;
+  order.competitionType = competitionType;
+  domain::SegmentDefinition segment;
+  segment.segmentType = segmentType;
+  segment.value = value;
+  segment.pointTypeAtEnd = domain::PointType::FINISH_M;
+  order.segments.push_back(segment);
+  return order;
+}
+
+void createOneSecondOrder(route::RouteOrderEditor& editor,
+                          domain::CompetitionType competitionType) {
+  editor.beginCreate();
+  if (competitionType == domain::CompetitionType::NON_EMIT)
+    editor.handle(route::EditorKey::DOWN);
+  editor.handle(route::EditorKey::RIGHT);  // lock competition type
+  editor.handle(route::EditorKey::UP);     // start 01:00
+  editor.handle(route::EditorKey::RIGHT);
+  editor.handle(route::EditorKey::UP);
+  editor.handle(route::EditorKey::UP);     // start 01:02
+  editor.handle(route::EditorKey::RIGHT);
+  editor.handle(route::EditorKey::RIGHT);  // TIME -> value
+  editor.handle(route::EditorKey::RIGHT);
+  editor.handle(route::EditorKey::RIGHT);
+  editor.handle(route::EditorKey::RIGHT);
+  editor.handle(route::EditorKey::UP);     // 0:01
+  editor.handle(route::EditorKey::RIGHT);  // continuation
+  editor.handle(route::EditorKey::DOWN);
+  editor.handle(route::EditorKey::DOWN);   // finish
+}
+
+void testEmitAndNonEmitOrderCreation() {
+  for (uint8_t kind = 0; kind < 2; ++kind) {
+    route::RouteOrderEditor editor;
+    const domain::CompetitionType expected =
+        kind == 0 ? domain::CompetitionType::EMIT
+                  : domain::CompetitionType::NON_EMIT;
+    createOneSecondOrder(editor, expected);
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(route::EditorResult::SAVE_REQUESTED),
+        static_cast<uint8_t>(editor.handle(route::EditorKey::RIGHT)));
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(expected),
+                            static_cast<uint8_t>(editor.draft().competitionType));
+    TEST_ASSERT_EQUAL_UINT8(1, editor.draft().startHour);
+    TEST_ASSERT_EQUAL_UINT8(2, editor.draft().startMinute);
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(domain::RouteOrderValidationError::NONE),
+        static_cast<uint8_t>(domain::validateRouteOrder(editor.draft())));
+  }
+}
+
+void testCompetitionTypeIsImmutableAfterSelectionAndDuringEdit() {
+  route::RouteOrderEditor editor;
+  editor.beginCreate();
+  editor.handle(route::EditorKey::RIGHT);
+  editor.handle(route::EditorKey::LEFT);
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(route::EditorPhase::START_TIME),
+      static_cast<uint8_t>(editor.view().phase));
+  editor.handle(route::EditorKey::UP);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(domain::CompetitionType::EMIT),
+                          static_cast<uint8_t>(editor.draft().competitionType));
+
+  const domain::RouteOrder current =
+      makeOrder(domain::CompetitionType::NON_EMIT);
+  editor.beginBrowse(current);
+  editor.handle(route::EditorKey::RIGHT);
+  editor.handle(route::EditorKey::UP);
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(domain::CompetitionType::NON_EMIT),
+      static_cast<uint8_t>(editor.draft().competitionType));
+}
+
+void testRouteOrderValidationOrderValuesAndFinish() {
+  domain::RouteOrder order = makeOrder(domain::CompetitionType::EMIT);
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(domain::RouteOrderValidationError::NONE),
+      static_cast<uint8_t>(domain::validateRouteOrder(order)));
+  order.segments[0].value = 0;
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(domain::RouteOrderValidationError::INVALID_VALUE),
+      static_cast<uint8_t>(domain::validateRouteOrder(order)));
+  order = makeOrder(domain::CompetitionType::EMIT,
+                    domain::SegmentType::SPEED, 100);
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(domain::RouteOrderValidationError::INVALID_VALUE),
+      static_cast<uint8_t>(domain::validateRouteOrder(order)));
+  order = makeOrder(domain::CompetitionType::EMIT);
+  order.startHour = 24;
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(domain::RouteOrderValidationError::INVALID_START_TIME),
+      static_cast<uint8_t>(domain::validateRouteOrder(order)));
+  order = makeOrder(domain::CompetitionType::EMIT);
+  order.segments[0].segmentIndex = 1;
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(domain::RouteOrderValidationError::INDEX_ORDER),
+      static_cast<uint8_t>(domain::validateRouteOrder(order)));
+  order = makeOrder(domain::CompetitionType::EMIT);
+  order.segments[0].pointTypeAtEnd = domain::PointType::NORMAL;
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(domain::RouteOrderValidationError::MISSING_FINISH),
+      static_cast<uint8_t>(domain::validateRouteOrder(order)));
+  order.segments[0].pointTypeAtEnd = static_cast<domain::PointType>(99);
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(domain::RouteOrderValidationError::INVALID_POINT),
+      static_cast<uint8_t>(domain::validateRouteOrder(order)));
+}
+
+void testJatValidationByCompetitionType() {
+  domain::RouteOrder order = makeOrder(domain::CompetitionType::NON_EMIT);
+  domain::SegmentDefinition first = order.segments[0];
+  first.pointTypeAtEnd = domain::PointType::JAT;
+  first.hasJatType = true;
+  first.jatType = domain::JatType::MANNED_JAT;
+  first.hasJatOffsetMinutes = false;
+  order.segments[0] = first;
+  domain::SegmentDefinition finish;
+  finish.segmentIndex = 1;
+  finish.startPointIndex = 1;
+  finish.endPointIndex = 2;
+  finish.value = 10;
+  finish.pointTypeAtEnd = domain::PointType::FINISH_M;
+  order.segments.push_back(finish);
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(domain::RouteOrderValidationError::NONE),
+      static_cast<uint8_t>(domain::validateRouteOrder(order)));
+  order.segments[0].jatType = domain::JatType::EMIT_MLA;
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(domain::RouteOrderValidationError::INVALID_JAT),
+      static_cast<uint8_t>(domain::validateRouteOrder(order)));
+}
+
+void testMittisRangeAndForcedFollowingTimeSegment() {
+  domain::RouteOrder order;
+  domain::SegmentDefinition mittis;
+  mittis.segmentType = domain::SegmentType::MITTIS;
+  mittis.value = 1000;
+  mittis.hasMittisDuration = true;
+  mittis.mittisDurationSeconds = 60;
+  mittis.pointTypeAtEnd = domain::PointType::FINISH_M;
+  order.segments.push_back(mittis);
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(domain::RouteOrderValidationError::NONE),
+      static_cast<uint8_t>(domain::validateRouteOrder(order)));
+  order.segments[0].value = 999;
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(domain::RouteOrderValidationError::INVALID_VALUE),
+      static_cast<uint8_t>(domain::validateRouteOrder(order)));
+  order.segments[0].value = 1000;
+  order.segments[0].hasMittisDuration = false;
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(domain::RouteOrderValidationError::INVALID_MITTIS),
+      static_cast<uint8_t>(domain::validateRouteOrder(order)));
+
+  route::RouteOrderEditor editor;
+  editor.beginCreate();
+  editor.handle(route::EditorKey::RIGHT);  // competition type
+  editor.handle(route::EditorKey::RIGHT);  // hour -> minute
+  editor.handle(route::EditorKey::RIGHT);  // start time accepted
+  editor.handle(route::EditorKey::DOWN);
+  editor.handle(route::EditorKey::DOWN);   // MITTIS
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(domain::SegmentType::MITTIS),
+                          static_cast<uint8_t>(editor.view().segmentType));
+  editor.handle(route::EditorKey::RIGHT);  // distance
+  editor.handle(route::EditorKey::UP);     // 1000 m
+  editor.handle(route::EditorKey::RIGHT);
+  editor.handle(route::EditorKey::RIGHT);
+  editor.handle(route::EditorKey::RIGHT);
+  editor.handle(route::EditorKey::RIGHT);  // accept distance
+  TEST_ASSERT_EQUAL_UINT8(0, editor.draft().segments.size());
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(route::EditorPhase::VALUE),
+                          static_cast<uint8_t>(editor.view().phase));
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(domain::SegmentType::MITTIS),
+                          static_cast<uint8_t>(editor.view().segmentType));
+  TEST_ASSERT_TRUE(editor.view().enteringMittisTime);
+  editor.handle(route::EditorKey::LEFT);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(route::EditorPhase::VALUE),
+                          static_cast<uint8_t>(editor.view().phase));
+  TEST_ASSERT_FALSE(editor.view().enteringMittisTime);
+  editor.handle(route::EditorKey::RIGHT);
+  editor.handle(route::EditorKey::RIGHT);
+  editor.handle(route::EditorKey::RIGHT);
+  editor.handle(route::EditorKey::RIGHT);  // distance accepted again
+  editor.handle(route::EditorKey::RIGHT);
+  editor.handle(route::EditorKey::RIGHT);
+  editor.handle(route::EditorKey::RIGHT);
+  editor.handle(route::EditorKey::UP);     // 0:01
+  editor.handle(route::EditorKey::RIGHT);  // continuation
+  editor.handle(route::EditorKey::DOWN);
+  editor.handle(route::EditorKey::DOWN);
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(route::EditorResult::SAVE_REQUESTED),
+      static_cast<uint8_t>(editor.handle(route::EditorKey::RIGHT)));
+  TEST_ASSERT_EQUAL_UINT8(1, editor.draft().segments.size());
+  TEST_ASSERT_EQUAL_UINT16(1,
+                           editor.draft().segments[0].mittisDurationSeconds);
+}
+
+void testCreationCancelAndValidationFailurePreserveCurrentOrder() {
+  Fixture fixture;
+  const domain::RouteOrder original =
+      makeOrder(domain::CompetitionType::EMIT, domain::SegmentType::TIME, 60);
+  fixture.application.setInitialRouteOrder(original);
+  acceptStartupTime(fixture, 0, 0);
+  openMainAt(fixture, 0);
+  press(fixture.application, core::ButtonId::Right);
+  press(fixture.application, core::ButtonId::Down);
+  press(fixture.application, core::ButtonId::Right);  // edit selected
+  press(fixture.application, core::ButtonId::Down);   // SPEED, zero draft value
+  press(fixture.application, core::ButtonId::Right);  // value
+  for (uint8_t i = 0; i < 2; ++i) press(fixture.application, core::ButtonId::Right);
+  const domain::RouteOrder* request = nullptr;
+  TEST_ASSERT_FALSE(fixture.application.takeRouteOrderSaveRequest(request));
+  TEST_ASSERT_EQUAL_UINT32(60,
+                           fixture.application.currentRouteOrder()->segments[0].value);
+  fixture.application.handleButton(
+      button(core::ButtonId::Left, core::ButtonEventType::LongStart));
+  TEST_ASSERT_EQUAL_UINT32(60,
+                           fixture.application.currentRouteOrder()->segments[0].value);
+}
+
+void testRightEditsSegmentLeftCancelsAndFailedSavePreservesCurrent() {
+  Fixture fixture;
+  const domain::RouteOrder original = makeOrder(domain::CompetitionType::EMIT);
+  fixture.application.setInitialRouteOrder(original);
+  acceptStartupTime(fixture, 0, 0);
+  openMainAt(fixture, 0);
+  press(fixture.application, core::ButtonId::Right);
+  press(fixture.application, core::ButtonId::Down);
+  press(fixture.application, core::ButtonId::Right);
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(route::EditorPhase::SEGMENT_TYPE),
+      static_cast<uint8_t>(fixture.application.displayModel().order.editor.phase));
+  press(fixture.application, core::ButtonId::Left);
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(route::EditorPhase::BROWSE),
+      static_cast<uint8_t>(fixture.application.displayModel().order.editor.phase));
+  TEST_ASSERT_EQUAL_UINT32(60,
+                           fixture.application.currentRouteOrder()->segments[0].value);
+
+  press(fixture.application, core::ButtonId::Right);
+  press(fixture.application, core::ButtonId::Down);  // SPEED
+  press(fixture.application, core::ButtonId::Right);
+  press(fixture.application, core::ButtonId::Right);
+  press(fixture.application, core::ButtonId::Up);
+  press(fixture.application, core::ButtonId::Right);
+  const domain::RouteOrder* request = nullptr;
+  TEST_ASSERT_TRUE(fixture.application.takeRouteOrderSaveRequest(request));
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(domain::SegmentType::SPEED),
+                          static_cast<uint8_t>(request->segments[0].segmentType));
+  fixture.application.completeRouteOrderSave(false);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(domain::SegmentType::TIME),
+                          static_cast<uint8_t>(fixture.application
+                                                   .currentRouteOrder()
+                                                   ->segments[0]
+                                                   .segmentType));
+}
+
+void testLongRightStartsConfirmedReplacementAndKeepsOldUntilSave() {
+  Fixture fixture;
+  const domain::RouteOrder original =
+      makeOrder(domain::CompetitionType::NON_EMIT, domain::SegmentType::TIME,
+                60);
+  fixture.application.setInitialRouteOrder(original);
+  acceptStartupTime(fixture, 0, 0);
+  openMainAt(fixture, 0);
+  press(fixture.application, core::ButtonId::Right);  // browse
+
+  press(fixture.application, core::ButtonId::Right);  // press precedes long start
+  fixture.application.handleButton(
+      button(core::ButtonId::Right, core::ButtonEventType::LongStart));
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(route::EditorPhase::REPLACE_PROMPT),
+      static_cast<uint8_t>(fixture.application.displayModel().order.editor.phase));
+  press(fixture.application, core::ButtonId::Left);
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(route::EditorPhase::BROWSE),
+      static_cast<uint8_t>(fixture.application.displayModel().order.editor.phase));
+
+  press(fixture.application, core::ButtonId::Right);
+  fixture.application.handleButton(
+      button(core::ButtonId::Right, core::ButtonEventType::LongStart));
+  press(fixture.application, core::ButtonId::Right);  // confirm replacement
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(route::EditorPhase::COMPETITION_TYPE),
+      static_cast<uint8_t>(fixture.application.displayModel().order.editor.phase));
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(domain::CompetitionType::NON_EMIT),
+      static_cast<uint8_t>(fixture.application.currentRouteOrder()->competitionType));
+
+  press(fixture.application, core::ButtonId::Right);  // lock EMIT
+  press(fixture.application, core::ButtonId::Right);  // hour -> minute
+  press(fixture.application, core::ButtonId::Right);  // accept 00:00
+  press(fixture.application, core::ButtonId::Right);  // TIME value
+  press(fixture.application, core::ButtonId::Right);
+  press(fixture.application, core::ButtonId::Right);
+  press(fixture.application, core::ButtonId::Right);
+  press(fixture.application, core::ButtonId::Up);
+  press(fixture.application, core::ButtonId::Right);  // continuation
+  press(fixture.application, core::ButtonId::Down);
+  press(fixture.application, core::ButtonId::Down);
+  press(fixture.application, core::ButtonId::Right);  // finish/save request
+
+  const domain::RouteOrder* replacement = nullptr;
+  TEST_ASSERT_TRUE(
+      fixture.application.takeRouteOrderSaveRequest(replacement));
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(domain::CompetitionType::EMIT),
+                          static_cast<uint8_t>(replacement->competitionType));
+  TEST_ASSERT_EQUAL_UINT32(1, replacement->segments[0].value);
+  TEST_ASSERT_EQUAL_UINT32(60,
+                           fixture.application.currentRouteOrder()->segments[0].value);
+  fixture.application.completeRouteOrderSave(true);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(domain::CompetitionType::EMIT),
+                          static_cast<uint8_t>(fixture.application
+                                                   .currentRouteOrder()
+                                                   ->competitionType));
+  TEST_ASSERT_EQUAL_UINT32(1,
+                           fixture.application.currentRouteOrder()->segments[0].value);
+}
+
+void testCancelledReplacementKeepsCurrentOrder() {
+  Fixture fixture;
+  const domain::RouteOrder original = makeOrder(domain::CompetitionType::EMIT);
+  fixture.application.setInitialRouteOrder(original);
+  acceptStartupTime(fixture, 0, 0);
+  openMainAt(fixture, 0);
+  press(fixture.application, core::ButtonId::Right);
+  press(fixture.application, core::ButtonId::Right);
+  fixture.application.handleButton(
+      button(core::ButtonId::Right, core::ButtonEventType::LongStart));
+  press(fixture.application, core::ButtonId::Right);  // start replacement
+  fixture.application.handleButton(
+      button(core::ButtonId::Left, core::ButtonEventType::LongStart));
+  press(fixture.application, core::ButtonId::Right);  // confirm cancel
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(core::Screen::Menu),
+                          static_cast<uint8_t>(fixture.application.screen()));
+  TEST_ASSERT_EQUAL_UINT32(60,
+                           fixture.application.currentRouteOrder()->segments[0].value);
+}
+
+void testCodecSaveReloadAndUnknownSchemaHandling() {
+  const domain::RouteOrder order =
+      makeOrder(domain::CompetitionType::NON_EMIT, domain::SegmentType::SPEED,
+                42);
+  std::vector<uint8_t> bytes;
+  TEST_ASSERT_TRUE(route::RouteOrderCodec::encode(order, bytes));
+  domain::RouteOrder decoded;
+  TEST_ASSERT_TRUE(
+      route::RouteOrderCodec::decode(bytes.data(), bytes.size(), decoded));
+  TEST_ASSERT_EQUAL_UINT32(42, decoded.segments[0].value);
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(domain::CompetitionType::NON_EMIT),
+      static_cast<uint8_t>(decoded.competitionType));
+  bytes[4] = 99;
+  TEST_ASSERT_FALSE(
+      route::RouteOrderCodec::decode(bytes.data(), bytes.size(), decoded));
+  domain::RouteOrder old = order;
+  old.schemaVersion = 0;
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(domain::RouteOrderValidationError::UNSUPPORTED_SCHEMA),
+      static_cast<uint8_t>(domain::validateRouteOrder(old)));
+
+  MemoryRouteOrderStore store;
+  TEST_ASSERT_TRUE(store.replace(order));
+  domain::RouteOrder reloaded;
+  TEST_ASSERT_TRUE(store.load(reloaded));
+  TEST_ASSERT_EQUAL_UINT32(42, reloaded.segments[0].value);
+  store.failReplace = true;
+  domain::RouteOrder replacement = order;
+  replacement.segments[0].value = 43;
+  TEST_ASSERT_FALSE(store.replace(replacement));
+  TEST_ASSERT_TRUE(store.load(reloaded));
+  TEST_ASSERT_EQUAL_UINT32(42, reloaded.segments[0].value);
 }
 
 void testClockValidationBoundaries() {
@@ -222,7 +628,7 @@ void testWikiMenuOpeningSemanticsAndReturn() {
   TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(core::Screen::BasicView),
                           static_cast<uint8_t>(fixture.application.screen()));
   press(fixture.application, core::ButtonId::Up);
-  TEST_ASSERT_EQUAL_UINT8(7, fixture.application.menuSelectedIndex());
+  TEST_ASSERT_EQUAL_UINT8(6, fixture.application.menuSelectedIndex());
 }
 
 void testMainMenuWrapsAndSubmenuClamps() {
@@ -230,14 +636,17 @@ void testMainMenuWrapsAndSubmenuClamps() {
   acceptStartupTime(fixture, 0, 0);
   openMainAt(fixture, 0);
   press(fixture.application, core::ButtonId::Up);
-  TEST_ASSERT_EQUAL_UINT8(7, fixture.application.menuSelectedIndex());
+  TEST_ASSERT_EQUAL_UINT8(6, fixture.application.menuSelectedIndex());
   press(fixture.application, core::ButtonId::Down);
   TEST_ASSERT_EQUAL_UINT8(0, fixture.application.menuSelectedIndex());
   press(fixture.application, core::ButtonId::Right);
-  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(core::MenuPage::Order),
-                          static_cast<uint8_t>(fixture.application.menuPage()));
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(core::Screen::OrderEdit),
+                          static_cast<uint8_t>(fixture.application.screen()));
   press(fixture.application, core::ButtonId::Up);
-  TEST_ASSERT_EQUAL_UINT8(0, fixture.application.menuSelectedIndex());
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(domain::CompetitionType::NON_EMIT),
+      static_cast<uint8_t>(fixture.application.displayModel()
+                               .order.editor.competitionType));
 }
 
 void testLongMainMenuScrollKeepsSelectionVisible() {
@@ -245,28 +654,67 @@ void testLongMainMenuScrollKeepsSelectionVisible() {
   acceptStartupTime(fixture, 0, 0);
   press(fixture.application, core::ButtonId::Up);
   const core::MenuDisplayModel menu = fixture.application.displayModel().menu;
-  TEST_ASSERT_EQUAL_UINT8(7, menu.selectedIndex);
-  TEST_ASSERT_EQUAL_UINT8(3, menu.scrollOffset);
+  TEST_ASSERT_EQUAL_UINT8(6, menu.selectedIndex);
+  TEST_ASSERT_EQUAL_UINT8(2, menu.scrollOffset);
   TEST_ASSERT_TRUE(menu.selectedVisibleRow < menu.visibleRowCount);
 }
 
-void testDisabledMenuItemCannotExecute() {
+void testOrderMenuStartsUnifiedCreation() {
   Fixture fixture;
   acceptStartupTime(fixture, 0, 0);
   openMainAt(fixture, 0);
   press(fixture.application, core::ButtonId::Right);
-  press(fixture.application, core::ButtonId::Right);
-  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(core::Screen::Menu),
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(core::Screen::OrderEdit),
                           static_cast<uint8_t>(fixture.application.screen()));
-  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(core::MenuPage::Order),
-                          static_cast<uint8_t>(fixture.application.menuPage()));
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(route::EditorPhase::COMPETITION_TYPE),
+      static_cast<uint8_t>(fixture.application.displayModel().order.editor.phase));
+}
+
+void testOrderBrowseShowsStartTimeBeforeSegments() {
+  Fixture fixture;
+  domain::RouteOrder order = makeOrder(domain::CompetitionType::EMIT);
+  order.startHour = 12;
+  order.startMinute = 34;
+  fixture.application.setInitialRouteOrder(order);
+  acceptStartupTime(fixture, 0, 0);
+  openMainAt(fixture, 0);
+  press(fixture.application, core::ButtonId::Right);
+  TEST_ASSERT_TRUE(fixture.application.displayModel().order.showsStartTime);
+  TEST_ASSERT_FALSE(
+      fixture.application.displayModel().order.hasSelectedSegment);
+  press(fixture.application, core::ButtonId::Down);
+  TEST_ASSERT_FALSE(fixture.application.displayModel().order.showsStartTime);
+  TEST_ASSERT_TRUE(fixture.application.displayModel().order.hasSelectedSegment);
+}
+
+void testPersistentTextColorSelectionRequest() {
+  Fixture fixture;
+  acceptStartupTime(fixture, 0, 0);
+  openMainAt(fixture, 4);
+  press(fixture.application, core::ButtonId::Right);  // display menu
+  for (uint8_t index = 0; index < 4; ++index)
+    press(fixture.application, core::ButtonId::Down);
+  press(fixture.application, core::ButtonId::Right);  // text color choices
+  press(fixture.application, core::ButtonId::Down);   // red
+  press(fixture.application, core::ButtonId::Right);
+  domain::TextColor requested = domain::TextColor::WHITE;
+  TEST_ASSERT_TRUE(fixture.application.takeTextColorSaveRequest(requested));
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(domain::TextColor::RED),
+                          static_cast<uint8_t>(requested));
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(domain::TextColor::WHITE),
+      static_cast<uint8_t>(fixture.application.displayModel().textColor));
+  fixture.application.completeTextColorSave(true);
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(domain::TextColor::RED),
+      static_cast<uint8_t>(fixture.application.displayModel().textColor));
 }
 
 void testMenuTimeEditCancelAndAccept() {
   Fixture fixture;
   acceptStartupTime(fixture, 12, 34);
-  openMainAt(fixture, 2);
-  press(fixture.application, core::ButtonId::Right);
+  openMainAt(fixture, 1);
   press(fixture.application, core::ButtonId::Right);
   TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(core::Screen::TimeEdit),
                           static_cast<uint8_t>(fixture.application.screen()));
@@ -288,7 +736,7 @@ void testMenuTimeEditCancelAndAccept() {
 void testClockAndPulsesContinueInMenuAndDiagnostics() {
   Fixture fixture;
   acceptStartupTime(fixture, 1, 0);
-  openMainAt(fixture, 7);
+  openMainAt(fixture, 6);
   fixture.timeSource.advance(1000);
   pulse(fixture.application, 1, 0, 100000, 100000);
   assertClock(fixture.application.displayModel().clock, 1, 0, 1);
@@ -308,7 +756,7 @@ void testDiagnosticsContainsStatesAndDoesNotMutateDomain() {
   pulse(fixture.application, 10, 900000, 1000000, 1000000);
   const uint64_t trip1 = fixture.application.trip1DistanceMillimeters();
   const uint32_t calibration = fixture.application.millimetersPerPulse();
-  openMainAt(fixture, 7);
+  openMainAt(fixture, 6);
   press(fixture.application, core::ButtonId::Right);
   press(fixture.application, core::ButtonId::Right);
   fixture.application.handleButton(
@@ -339,8 +787,7 @@ void testCalibrationValidationStepAndFallback() {
 void testCalibrationMenuCancelUnchangedAndChangedSave() {
   Fixture fixture;
   acceptStartupTime(fixture, 0, 0);
-  openMainAt(fixture, 3);
-  press(fixture.application, core::ButtonId::Right);
+  openMainAt(fixture, 2);
   press(fixture.application, core::ButtonId::Right);
   press(fixture.application, core::ButtonId::Up);
   press(fixture.application, core::ButtonId::Left);
@@ -348,7 +795,7 @@ void testCalibrationMenuCancelUnchangedAndChangedSave() {
   TEST_ASSERT_FALSE(fixture.application.takeCalibrationSaveRequest(value));
   TEST_ASSERT_EQUAL_UINT32(1000, fixture.application.millimetersPerPulse());
   press(fixture.application, core::ButtonId::Right);
-  press(fixture.application, core::ButtonId::Right);
+  press(fixture.application, core::ButtonId::Right);  // unchanged accept
   TEST_ASSERT_FALSE(fixture.application.takeCalibrationSaveRequest(value));
   press(fixture.application, core::ButtonId::Right);
   press(fixture.application, core::ButtonId::Up);
@@ -362,8 +809,7 @@ void testCalibrationMenuCancelUnchangedAndChangedSave() {
 void testCalibrationSaveFailureStaysInEditor() {
   Fixture fixture;
   acceptStartupTime(fixture, 0, 0);
-  openMainAt(fixture, 3);
-  press(fixture.application, core::ButtonId::Right);
+  openMainAt(fixture, 2);
   press(fixture.application, core::ButtonId::Right);
   press(fixture.application, core::ButtonId::Up);
   press(fixture.application, core::ButtonId::Right);
@@ -399,7 +845,7 @@ void testTripMenuActionsResetNamedTripOnly() {
   Fixture fixture;
   acceptStartupTime(fixture, 0, 0);
   pulse(fixture.application, 5, 400000, 500000, 500000);
-  openMainAt(fixture, 6);
+  openMainAt(fixture, 5);
   press(fixture.application, core::ButtonId::Right);
   press(fixture.application, core::ButtonId::Right);
   TEST_ASSERT_EQUAL_UINT64(0, fixture.application.trip1DistanceMillimeters());
@@ -506,6 +952,16 @@ void testButtonDebounceAndLongRepeatSemantics() {
 
 int main(int, char**) {
   UNITY_BEGIN();
+  RUN_TEST(testEmitAndNonEmitOrderCreation);
+  RUN_TEST(testCompetitionTypeIsImmutableAfterSelectionAndDuringEdit);
+  RUN_TEST(testRouteOrderValidationOrderValuesAndFinish);
+  RUN_TEST(testJatValidationByCompetitionType);
+  RUN_TEST(testMittisRangeAndForcedFollowingTimeSegment);
+  RUN_TEST(testCreationCancelAndValidationFailurePreserveCurrentOrder);
+  RUN_TEST(testRightEditsSegmentLeftCancelsAndFailedSavePreservesCurrent);
+  RUN_TEST(testLongRightStartsConfirmedReplacementAndKeepsOldUntilSave);
+  RUN_TEST(testCancelledReplacementKeepsCurrentOrder);
+  RUN_TEST(testCodecSaveReloadAndUnknownSchemaHandling);
   RUN_TEST(testClockValidationBoundaries);
   RUN_TEST(testClockDoesNotAdvanceBeforeAcceptance);
   RUN_TEST(testStartupAlwaysRequiresTimeAndCannotBeBypassed);
@@ -518,7 +974,9 @@ int main(int, char**) {
   RUN_TEST(testWikiMenuOpeningSemanticsAndReturn);
   RUN_TEST(testMainMenuWrapsAndSubmenuClamps);
   RUN_TEST(testLongMainMenuScrollKeepsSelectionVisible);
-  RUN_TEST(testDisabledMenuItemCannotExecute);
+  RUN_TEST(testOrderMenuStartsUnifiedCreation);
+  RUN_TEST(testOrderBrowseShowsStartTimeBeforeSegments);
+  RUN_TEST(testPersistentTextColorSelectionRequest);
   RUN_TEST(testMenuTimeEditCancelAndAccept);
   RUN_TEST(testClockAndPulsesContinueInMenuAndDiagnostics);
   RUN_TEST(testDiagnosticsContainsStatesAndDoesNotMutateDomain);

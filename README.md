@@ -43,18 +43,16 @@ basic view.
 
 ## Menu tree
 
-The current wiki's complete top-level skeleton is represented. `Unavailable`
-items are visible but dimmed and cannot be activated; no success response is
-shown for them.
+The current wiki's top-level skeleton is represented. `AJOMAARAYS` is a single
+workflow; unavailable unrelated items remain visible but dimmed.
 
 | Main group | Items | Status |
 |---|---|---|
-| Ajomääräys ja pistevälit | Ajomääräys, Pistevälit | Unavailable: order/competition domain is not implemented yet |
-| Kilpailutyyppi ja JAT | Kilpailutyyppi, JAT-tyypit | Unavailable: competition and JAT domain is not implemented yet |
-| Kellonaika ja lähtöaika | Kellonaika; Lähtöajan korjaus | Clock editing works; start-time correction needs competition history |
-| Mittarikerroin ja mittis | Mittarikerroin; Mittis | Existing mm/pulse calibration works; measurement-course workflow is not implemented |
+| Ajomääräys | Unified creation, browsing, editing, and confirmed replacement | Implemented |
+| Kello | Direct clock editing | Implemented |
+| Kerroin | Direct mm/pulse calibration editing | Implemented |
 | Pisteet ja tapahtumat | Jaksojen pisteet, Kokonaispisteet, Tapahtumat | Unavailable: scoring and event repository do not exist yet |
-| Näyttöasetukset | Näyttöprofiili, Näyttöselitteet, Aikaeron muoto, Trip-tarkkuus | Unavailable: these persistent settings are not in the current core/store |
+| Näyttöasetukset | Näyttöprofiili, Näyttöselitteet, Aikaeron muoto, Trip-tarkkuus, Tekstin väri | Persistent white/red/green text color works; other rows remain unavailable |
 | Tripit | Nollaa Trip 1, Nollaa Trip 2, Ulkoinen trip | Both resets work; external display source needs its hardware/protocol adapter |
 | Järjestelmä | Diagnostiikka, Painikeasetukset, Muut asetukset | Diagnostics works; persistent button/system settings are not implemented |
 
@@ -78,6 +76,39 @@ speed, last-pulse age and zero-timeout state, current UI state, software-clock
 state/time, and elapsed time since clock acceptance. Left closes it. Opening or
 viewing diagnostics does not reset trips, change settings, stop the clock, or
 stop pulse processing.
+
+## Route-order creation, editing, and storage
+
+`AJOMAARAYS` is now one top-level workflow. With no stored order it first asks
+for `EMIT` or `NON-EMIT`, locks that choice, asks for the competition start time,
+and then enters ordered TIME, SPEED, or MITTIS segments. Each accepted TIME or
+SPEED value continues with `SEURAAVA`, `JAT`, or `MAALI`. TIME accepts 1...3599
+seconds and SPEED a two-digit 1...99 km/h value. MITTIS accepts 1000...9999
+metres and then a TIME value for that same interval; SPEED is not available as
+the MITTIS interval's time rule. A finish is mandatory. Segment browsing starts
+with the competition start time and shows both distance and time for MITTIS.
+Segment
+browsing labels the start point as `L` and the finish point as `M`, for example
+`L-1` and `3-M`.
+
+With an existing order, Up/Down browses segments, Right edits the selected
+segment, and Left returns or abandons the in-progress edit. A long Right opens
+the `UUSI AJOMAARAYS?` confirmation; Left declines and Right starts a separate
+replacement draft. Competition type is not part of ordinary editing.
+
+The domain model and validator are in `src/domain/RouteOrder.*`. The editor,
+binary codec, and UI-independent storage port are in `src/route/`. The ESP32
+adapter stores a checksum-protected blob in alternating Preferences slots. It
+writes and verifies the inactive payload before advancing its generation, so a
+failed write leaves the previous valid generation loadable. Unsupported schema
+versions, corrupt payloads, invalid values, invalid point order, incompatible
+JAT types, and missing/early finishes are rejected before replacement.
+
+The active order and the editor draft are distinct objects. Creation or editing
+does not mutate the active order; only a validated and successfully persisted
+draft becomes current. The codec and validator have no UI, Bluetooth, Arduino,
+or Preferences dependency and can therefore be reused by a future Android
+import adapter.
 
 ## Architecture
 
