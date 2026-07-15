@@ -38,23 +38,15 @@ input::PulseInput pulseInput(BoardConfig::PIN_PULSE_INPUT,
                              BoardConfig::PULSE_INPUT_MODE,
                              BoardConfig::PULSE_INTERRUPT_MODE);
 
+ports::ArduinoClock clockSource;
+core::SoftwareClock softwareClock(clockSource);
 core::ApplicationCore application(
-    CalibrationConfig::DEFAULT_MILLIMETERS_PER_PULSE,
+    softwareClock, CalibrationConfig::DEFAULT_MILLIMETERS_PER_PULSE,
     DemoConfig::zeroSpeedTimeoutUs);
 settings::SettingsRepository settingsRepository;
 ui::DisplayView view;
-ports::ArduinoClock clockSource;
 uint32_t lastDisplayUpdateMs = 0;
-core::Screen renderedScreen = core::Screen::Drive;
-
-void updateButtonStatesOnDisplay() {
-  view.showButtonState(ui::ButtonIndicator::Left, leftButton.isPressed());
-  view.showButtonState(ui::ButtonIndicator::Up, upButton.isPressed());
-  view.showButtonState(ui::ButtonIndicator::Down, downButton.isPressed());
-  view.showButtonState(ui::ButtonIndicator::Right, rightButton.isPressed());
-  view.showButtonState(ui::ButtonIndicator::TripReset,
-                       tripResetButton.isPressed());
-}
+core::Screen renderedScreen = core::Screen::StartupTimeEntry;
 
 void dispatchButton(input::DebouncedButton& button, core::ButtonId id,
                     uint32_t nowMs) {
@@ -99,7 +91,6 @@ void setup() {
 
   view.begin();
   view.render(application.displayModel());
-  updateButtonStatesOnDisplay();
 }
 
 void loop() {
@@ -129,6 +120,7 @@ void loop() {
   application.handleDistancePulses(
       {pulseSnapshot.pendingPulses, pulseSnapshot.previousPulseAtUs,
        pulseSnapshot.lastPulseAtUs, nowUs});
+  application.tick(nowUs);
 
   uint32_t calibrationToSave = 0;
   if (application.takeCalibrationSaveRequest(calibrationToSave)) {
@@ -142,15 +134,11 @@ void loop() {
 
   const core::DisplayModel displayModel = application.displayModel();
   const bool screenChanged = displayModel.screen != renderedScreen;
-  if (screenChanged || displayModel.screen == core::Screen::Calibration ||
+  if (screenChanged ||
       nowMs - lastDisplayUpdateMs >= DemoConfig::displayUpdateIntervalMs) {
     view.render(displayModel);
     renderedScreen = displayModel.screen;
     lastDisplayUpdateMs = nowMs;
   }
-  if (displayModel.screen == core::Screen::Drive) {
-    updateButtonStatesOnDisplay();
-  }
-
   delay(POLL_INTERVAL_MS);
 }
