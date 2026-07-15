@@ -8,48 +8,39 @@ DebouncedButton::DebouncedButton(uint8_t pin, uint8_t activeLevel,
                                  uint32_t repeatIntervalMs)
     : pin_(pin),
       activeLevel_(activeLevel),
-      debounceMs_(debounceMs),
-      longPressDelayMs_(longPressDelayMs),
-      repeatIntervalMs_(repeatIntervalMs) {}
+      interpreter_(debounceMs, longPressDelayMs, repeatIntervalMs) {}
 
 void DebouncedButton::begin() {
   pinMode(pin_, INPUT_PULLUP);
-  rawPressed_ = readPressed();
-  stablePressed_ = rawPressed_;
+  const uint32_t nowMs = millis();
+  interpreter_.reset(readPressed(), nowMs);
+  stablePressed_ = interpreter_.isPressed();
   pressedEventPending_ = false;
+  releasedEventPending_ = false;
+  longPressEventPending_ = false;
   repeatEventPending_ = false;
-  rawChangedAtMs_ = millis();
-  nextRepeatAtMs_ = rawChangedAtMs_ + longPressDelayMs_;
 }
 
 void DebouncedButton::update(uint32_t nowMs) {
-  const bool pressed = readPressed();
+  const ButtonTransitions transitions =
+      interpreter_.update(readPressed(), nowMs);
+  stablePressed_ = interpreter_.isPressed();
+  pressedEventPending_ = pressedEventPending_ || transitions.pressed;
+  releasedEventPending_ = releasedEventPending_ || transitions.released;
+  longPressEventPending_ = longPressEventPending_ || transitions.longStart;
+  repeatEventPending_ = repeatEventPending_ || transitions.longRepeat;
+}
 
-  if (pressed != rawPressed_) {
-    rawPressed_ = pressed;
-    rawChangedAtMs_ = nowMs;
-  }
+bool DebouncedButton::consumeReleasedEvent() {
+  const bool event = releasedEventPending_;
+  releasedEventPending_ = false;
+  return event;
+}
 
-  if (rawPressed_ != stablePressed_ &&
-      nowMs - rawChangedAtMs_ >= debounceMs_) {
-    stablePressed_ = rawPressed_;
-    if (stablePressed_) {
-      pressedEventPending_ = true;
-      repeatEventPending_ = false;
-      nextRepeatAtMs_ = nowMs + longPressDelayMs_;
-    } else {
-      repeatEventPending_ = false;
-    }
-  }
-
-  if (stablePressed_ && longPressDelayMs_ > 0 && repeatIntervalMs_ > 0 &&
-      static_cast<int32_t>(nowMs - nextRepeatAtMs_) >= 0) {
-    repeatEventPending_ = true;
-    nextRepeatAtMs_ += repeatIntervalMs_;
-    if (static_cast<int32_t>(nowMs - nextRepeatAtMs_) >= 0) {
-      nextRepeatAtMs_ = nowMs + repeatIntervalMs_;
-    }
-  }
+bool DebouncedButton::consumeLongPressEvent() {
+  const bool event = longPressEventPending_;
+  longPressEventPending_ = false;
+  return event;
 }
 
 bool DebouncedButton::consumePressedEvent() {

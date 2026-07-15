@@ -45,6 +45,27 @@ void DisplayView::begin() {
   showDriveScreen();
 }
 
+void DisplayView::render(const core::DisplayModel& model) {
+  if (model.screen != displayedScreen_) {
+    displayedScreen_ = model.screen;
+    if (model.screen == core::Screen::Drive) {
+      showDriveScreen();
+    } else {
+      calibrationInitialized_ = false;
+    }
+  }
+
+  if (model.screen == core::Screen::Calibration) {
+    showCalibration(model.calibration.editedMillimetersPerPulse,
+                    model.calibration.saveFailed);
+    return;
+  }
+
+  showSpeed(model.speedKmh);
+  showDiagnostics(model.totalPulseCount, model.trip1.distanceMillimeters,
+                  model.trip2.distanceMillimeters);
+}
+
 void DisplayView::showDriveScreen() {
   display_.fillScreen(TFT_BLACK);
   display_.drawFastHLine(0, SPEED_AREA_HEIGHT - 1,
@@ -56,8 +77,9 @@ void DisplayView::showDriveScreen() {
                          TFT_DARKGREY);
 
   displayedSpeedTenths_ = UINT32_MAX;
-  displayedTotalPulses_ = UINT32_MAX;
-  displayedTripDistanceMm_ = UINT64_MAX;
+  displayedTotalPulses_ = UINT64_MAX;
+  displayedTrip1DistanceMm_ = UINT64_MAX;
+  displayedTrip2DistanceMm_ = UINT64_MAX;
   calibrationInitialized_ = false;
   for (uint8_t index = 0; index < toIndex(ButtonIndicator::Count); ++index) {
     buttonStateInitialized_[index] = false;
@@ -91,48 +113,58 @@ void DisplayView::showSpeed(float speedKmh) {
   display_.setTextSize(1);
 }
 
-void DisplayView::showDiagnostics(uint32_t totalPulses,
-                                  uint64_t tripDistanceMm) {
+void DisplayView::showDiagnostics(uint64_t totalPulses,
+                                  uint64_t trip1DistanceMm,
+                                  uint64_t trip2DistanceMm) {
   if (totalPulses == displayedTotalPulses_ &&
-      tripDistanceMm == displayedTripDistanceMm_) {
+      trip1DistanceMm == displayedTrip1DistanceMm_ &&
+      trip2DistanceMm == displayedTrip2DistanceMm_) {
     return;
   }
   displayedTotalPulses_ = totalPulses;
-  displayedTripDistanceMm_ = tripDistanceMm;
+  displayedTrip1DistanceMm_ = trip1DistanceMm;
+  displayedTrip2DistanceMm_ = trip2DistanceMm;
 
-  char totalText[11];
-  char tripText[24];
-  std::snprintf(totalText, sizeof(totalText), "%lu",
-                static_cast<unsigned long>(totalPulses));
-  if (tripDistanceMm < 10000000ULL) {
-    const uint64_t wholeMeters = tripDistanceMm / 1000ULL;
-    std::snprintf(tripText, sizeof(tripText), "%" PRIu64 ".%03" PRIu64,
-                  wholeMeters / 1000ULL, wholeMeters % 1000ULL);
-  } else {
-    const uint64_t wholeTenMeters = tripDistanceMm / 10000ULL;
-    std::snprintf(tripText, sizeof(tripText), "%" PRIu64 ".%02" PRIu64,
-                  wholeTenMeters / 100ULL, wholeTenMeters % 100ULL);
-  }
+  char totalText[24];
+  char trip1Text[24];
+  char trip2Text[24];
+  std::snprintf(totalText, sizeof(totalText), "%" PRIu64, totalPulses);
+  const auto formatTrip = [](char* text, size_t size, uint64_t distanceMm) {
+    if (distanceMm < 10000000ULL) {
+      const uint64_t wholeMeters = distanceMm / 1000ULL;
+      std::snprintf(text, size, "%" PRIu64 ".%03" PRIu64,
+                    wholeMeters / 1000ULL, wholeMeters % 1000ULL);
+    } else {
+      const uint64_t wholeTenMeters = distanceMm / 10000ULL;
+      std::snprintf(text, size, "%" PRIu64 ".%02" PRIu64,
+                    wholeTenMeters / 100ULL, wholeTenMeters % 100ULL);
+    }
+  };
+  formatTrip(trip1Text, sizeof(trip1Text), trip1DistanceMm);
+  formatTrip(trip2Text, sizeof(trip2Text), trip2DistanceMm);
 
-  display_.fillRect(0, DIAGNOSTIC_AREA_TOP,
-                    BoardConfig::DISPLAY_WIDTH / 2 - 1,
+  constexpr int16_t columnWidth = BoardConfig::DISPLAY_WIDTH / 3;
+  display_.fillRect(0, DIAGNOSTIC_AREA_TOP, BoardConfig::DISPLAY_WIDTH,
                     DIAGNOSTIC_AREA_HEIGHT - 1, TFT_BLACK);
-  display_.fillRect(BoardConfig::DISPLAY_WIDTH / 2 + 1,
-                    DIAGNOSTIC_AREA_TOP,
-                    BoardConfig::DISPLAY_WIDTH / 2 - 1,
-                    DIAGNOSTIC_AREA_HEIGHT - 1, TFT_BLACK);
+  display_.drawFastVLine(columnWidth, DIAGNOSTIC_AREA_TOP,
+                         DIAGNOSTIC_AREA_HEIGHT - 1, TFT_DARKGREY);
+  display_.drawFastVLine(columnWidth * 2, DIAGNOSTIC_AREA_TOP,
+                         DIAGNOSTIC_AREA_HEIGHT - 1, TFT_DARKGREY);
 
   display_.setTextSize(1);
   display_.setTextDatum(MC_DATUM);
   display_.setTextColor(TFT_CYAN, TFT_BLACK);
-  display_.drawString("TOTAL", BoardConfig::DISPLAY_WIDTH / 4,
+  display_.drawString("TOTAL", columnWidth / 2, DIAGNOSTIC_AREA_TOP + 7, 1);
+  display_.drawString("TRIP 1", columnWidth + columnWidth / 2,
                       DIAGNOSTIC_AREA_TOP + 7, 1);
-  display_.drawString("TRIP 1", BoardConfig::DISPLAY_WIDTH * 3 / 4,
+  display_.drawString("TRIP 2", columnWidth * 2 + columnWidth / 2,
                       DIAGNOSTIC_AREA_TOP + 7, 1);
   display_.setTextColor(TFT_WHITE, TFT_BLACK);
-  display_.drawString(totalText, BoardConfig::DISPLAY_WIDTH / 4,
+  display_.drawString(totalText, columnWidth / 2,
                       DIAGNOSTIC_AREA_TOP + 23, 2);
-  display_.drawString(tripText, BoardConfig::DISPLAY_WIDTH * 3 / 4,
+  display_.drawString(trip1Text, columnWidth + columnWidth / 2,
+                      DIAGNOSTIC_AREA_TOP + 23, 2);
+  display_.drawString(trip2Text, columnWidth * 2 + columnWidth / 2,
                       DIAGNOSTIC_AREA_TOP + 23, 2);
 }
 

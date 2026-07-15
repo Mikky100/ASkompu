@@ -3,11 +3,10 @@
 #include "BoardConfig.h"
 #include "CalibrationConfig.h"
 #include "DemoConfig.h"
-#include "domain/CalibrationSetting.h"
-#include "domain/SpeedCalculator.h"
-#include "domain/TripCounter.h"
+#include "core/ApplicationCore.h"
 #include "input/DebouncedButton.h"
 #include "input/PulseInput.h"
+#include "ports/ArduinoClock.h"
 #include "settings/SettingsRepository.h"
 #include "ui/DisplayView.h"
 
@@ -39,26 +38,14 @@ input::PulseInput pulseInput(BoardConfig::PIN_PULSE_INPUT,
                              BoardConfig::PULSE_INPUT_MODE,
                              BoardConfig::PULSE_INTERRUPT_MODE);
 
-domain::TripCounter trip1(
-    CalibrationConfig::DEFAULT_MILLIMETERS_PER_PULSE);
-domain::SpeedCalculator speedCalculator(
+core::ApplicationCore application(
     CalibrationConfig::DEFAULT_MILLIMETERS_PER_PULSE,
     DemoConfig::zeroSpeedTimeoutUs);
 settings::SettingsRepository settingsRepository;
 ui::DisplayView view;
+ports::ArduinoClock clockSource;
 uint32_t lastDisplayUpdateMs = 0;
-uint32_t millimetersPerPulse =
-    CalibrationConfig::DEFAULT_MILLIMETERS_PER_PULSE;
-uint32_t editedMillimetersPerPulse =
-    CalibrationConfig::DEFAULT_MILLIMETERS_PER_PULSE;
-bool calibrationSaveFailed = false;
-
-enum class Screen : uint8_t {
-  Drive,
-  Calibration,
-};
-
-Screen currentScreen = Screen::Drive;
+core::Screen renderedScreen = core::Screen::Drive;
 
 void updateButtonStatesOnDisplay() {
   view.showButtonState(ui::ButtonIndicator::Left, leftButton.isPressed());
@@ -69,26 +56,20 @@ void updateButtonStatesOnDisplay() {
                        tripResetButton.isPressed());
 }
 
-void logPressedEvent(const char* name, bool event) {
-  if (event) {
-    Serial.printf("Pressed: %s\n", name);
+void dispatchButton(input::DebouncedButton& button, core::ButtonId id,
+                    uint32_t nowMs) {
+  if (button.consumePressedEvent()) {
+    application.handleButton({id, core::ButtonEventType::Press, nowMs});
   }
-}
-
-void openCalibration(bool incrementValue) {
-  editedMillimetersPerPulse =
-      incrementValue
-          ? domain::calibration::increment(millimetersPerPulse)
-          : domain::calibration::decrement(millimetersPerPulse);
-  calibrationSaveFailed = false;
-  currentScreen = Screen::Calibration;
-  view.showCalibration(editedMillimetersPerPulse, false);
-}
-
-void returnToDrive(uint32_t nowMs) {
-  currentScreen = Screen::Drive;
-  view.showDriveScreen();
-  lastDisplayUpdateMs = nowMs - DemoConfig::displayUpdateIntervalMs;
+  if (button.consumeReleasedEvent()) {
+    application.handleButton({id, core::ButtonEventType::Release, nowMs});
+  }
+  if (button.consumeLongPressEvent()) {
+    application.handleButton({id, core::ButtonEventType::LongStart, nowMs});
+  }
+  if (button.consumeRepeatEvent()) {
+    application.handleButton({id, core::ButtonEventType::LongRepeat, nowMs});
+  }
 }
 
 }  // namespace
@@ -98,11 +79,9 @@ void setup() {
 
   const settings::CalibrationLoadResult calibration =
       settingsRepository.loadCalibration();
-  millimetersPerPulse = calibration.millimetersPerPulse;
-  trip1.setMillimetersPerPulse(millimetersPerPulse);
-  speedCalculator.setMillimetersPerPulse(millimetersPerPulse);
+  application.setInitialMillimetersPerPulse(calibration.millimetersPerPulse);
   Serial.printf("Calibration: %lu mm/pulse%s\n",
-                static_cast<unsigned long>(millimetersPerPulse),
+                static_cast<unsigned long>(calibration.millimetersPerPulse),
                 calibration.usedDefault ? " (default)" : " (NVS)");
 
   leftButton.begin();
@@ -112,14 +91,19 @@ void setup() {
   tripResetButton.begin();
   pulseInput.begin();
 
+  if (tripResetButton.isPressed()) {
+    application.handleButton(
+        {core::ButtonId::Trip1Reset, core::ButtonEventType::Press,
+         clockSource.monotonicMilliseconds()});
+  }
+
   view.begin();
-  view.showSpeed(0.0F);
-  view.showDiagnostics(0, trip1.distanceMillimeters());
+  view.render(application.displayModel());
   updateButtonStatesOnDisplay();
 }
 
 void loop() {
-  const uint32_t nowMs = millis();
+  const uint32_t nowMs = clockSource.monotonicMilliseconds();
 
   leftButton.update(nowMs);
   upButton.update(nowMs);
@@ -127,83 +111,44 @@ void loop() {
   rightButton.update(nowMs);
   tripResetButton.update(nowMs);
 
-  const bool leftPressed = leftButton.consumePressedEvent();
-  const bool upPressed = upButton.consumePressedEvent();
-  const bool downPressed = downButton.consumePressedEvent();
-  const bool rightPressed = rightButton.consumePressedEvent();
-  const bool resetPressed = tripResetButton.consumePressedEvent();
-  const bool upRepeated = upButton.consumeRepeatEvent();
-  const bool downRepeated = downButton.consumeRepeatEvent();
   const input::PulseSnapshot pulseSnapshot = pulseInput.consumeSnapshot();
-  const uint32_t nowUs = micros();
+  const uint32_t nowUs = clockSource.monotonicMicroseconds();
 
-  logPressedEvent("GPIO1 VASEN", leftPressed);
-  logPressedEvent("GPIO2 YLOS", upPressed);
-  logPressedEvent("GPIO3 ALAS", downPressed);
-  logPressedEvent("GPIO10 OIKEA", rightPressed);
-  logPressedEvent("GPIO14 RESET", resetPressed);
+  dispatchButton(leftButton, core::ButtonId::Left, nowMs);
+  dispatchButton(upButton, core::ButtonId::Up, nowMs);
+  dispatchButton(downButton, core::ButtonId::Down, nowMs);
+  dispatchButton(rightButton, core::ButtonId::Right, nowMs);
+  dispatchButton(tripResetButton, core::ButtonId::Trip1Reset, nowMs);
+
   if (pulseSnapshot.pendingPulses > 0) {
     Serial.printf("GPIO16 pulses: %lu, total: %lu\n",
                   static_cast<unsigned long>(pulseSnapshot.pendingPulses),
                   static_cast<unsigned long>(pulseSnapshot.totalPulses));
   }
 
-  if (tripResetButton.isPressed()) {
-    trip1.reset();
-  } else {
-    trip1.addPulses(pulseSnapshot.pendingPulses);
-  }
+  application.handleDistancePulses(
+      {pulseSnapshot.pendingPulses, pulseSnapshot.previousPulseAtUs,
+       pulseSnapshot.lastPulseAtUs, nowUs});
 
-  speedCalculator.update(nowUs, pulseSnapshot.totalPulses,
-                         pulseSnapshot.previousPulseAtUs,
-                         pulseSnapshot.lastPulseAtUs);
-
-  if (currentScreen == Screen::Drive) {
-    if (upPressed) {
-      openCalibration(true);
-    } else if (downPressed) {
-      openCalibration(false);
-    }
-  } else {
-    if (upPressed || upRepeated) {
-      editedMillimetersPerPulse =
-          domain::calibration::increment(editedMillimetersPerPulse);
-      calibrationSaveFailed = false;
-    }
-    if (downPressed || downRepeated) {
-      editedMillimetersPerPulse =
-          domain::calibration::decrement(editedMillimetersPerPulse);
-      calibrationSaveFailed = false;
-    }
-
-    if (leftPressed) {
-      returnToDrive(nowMs);
-    } else if (rightPressed) {
-      if (settingsRepository.saveCalibration(editedMillimetersPerPulse)) {
-        millimetersPerPulse = editedMillimetersPerPulse;
-        trip1.setMillimetersPerPulse(millimetersPerPulse);
-        speedCalculator.setMillimetersPerPulse(millimetersPerPulse);
-        Serial.printf("Saved calibration: %lu mm/pulse\n",
-                      static_cast<unsigned long>(millimetersPerPulse));
-        returnToDrive(nowMs);
-      } else {
-        calibrationSaveFailed = true;
-      }
-    }
-
-    if (currentScreen == Screen::Calibration) {
-      view.showCalibration(editedMillimetersPerPulse,
-                           calibrationSaveFailed);
+  uint32_t calibrationToSave = 0;
+  if (application.takeCalibrationSaveRequest(calibrationToSave)) {
+    const bool saved = settingsRepository.saveCalibration(calibrationToSave);
+    application.completeCalibrationSave(saved);
+    if (saved) {
+      Serial.printf("Saved calibration: %lu mm/pulse\n",
+                    static_cast<unsigned long>(calibrationToSave));
     }
   }
 
-  if (currentScreen == Screen::Drive) {
-    if (nowMs - lastDisplayUpdateMs >= DemoConfig::displayUpdateIntervalMs) {
-      lastDisplayUpdateMs = nowMs;
-      view.showSpeed(speedCalculator.speedKmh());
-      view.showDiagnostics(pulseSnapshot.totalPulses,
-                           trip1.distanceMillimeters());
-    }
+  const core::DisplayModel displayModel = application.displayModel();
+  const bool screenChanged = displayModel.screen != renderedScreen;
+  if (screenChanged || displayModel.screen == core::Screen::Calibration ||
+      nowMs - lastDisplayUpdateMs >= DemoConfig::displayUpdateIntervalMs) {
+    view.render(displayModel);
+    renderedScreen = displayModel.screen;
+    lastDisplayUpdateMs = nowMs;
+  }
+  if (displayModel.screen == core::Screen::Drive) {
     updateButtonStatesOnDisplay();
   }
 

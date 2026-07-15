@@ -2,6 +2,8 @@
 
 #include <Arduino.h>
 
+#include "ButtonInterpreter.h"
+
 namespace input {
 
 class DebouncedButton {
@@ -14,6 +16,8 @@ class DebouncedButton {
   void update(uint32_t nowMs);
   bool isPressed() const { return stablePressed_; }
   bool consumePressedEvent();
+  bool consumeReleasedEvent();
+  bool consumeLongPressEvent();
   bool consumeRepeatEvent();
 
  private:
@@ -21,15 +25,12 @@ class DebouncedButton {
 
   const uint8_t pin_;
   const uint8_t activeLevel_;
-  const uint32_t debounceMs_;
-  const uint32_t longPressDelayMs_;
-  const uint32_t repeatIntervalMs_;
-  bool rawPressed_ = false;
+  ButtonInterpreter interpreter_;
   bool stablePressed_ = false;
   bool pressedEventPending_ = false;
+  bool releasedEventPending_ = false;
+  bool longPressEventPending_ = false;
   bool repeatEventPending_ = false;
-  uint32_t rawChangedAtMs_ = 0;
-  uint32_t nextRepeatAtMs_ = 0;
 };
 
 }  // namespace input
