@@ -3,6 +3,7 @@
 #include "BoardConfig.h"
 #include "domain/TripCounter.h"
 #include "input/DebouncedButton.h"
+#include "input/PulseInput.h"
 #include "ui/DisplayView.h"
 
 namespace {
@@ -25,6 +26,9 @@ input::DebouncedButton rightButton(BoardConfig::PIN_BUTTON_RIGHT,
 input::DebouncedButton tripResetButton(BoardConfig::PIN_BUTTON_TRIP_RESET,
                                        BoardConfig::BUTTON_PRESSED_LEVEL,
                                        DEBOUNCE_MS);
+input::PulseInput pulseInput(BoardConfig::PIN_PULSE_INPUT,
+                             BoardConfig::PULSE_INPUT_MODE,
+                             BoardConfig::PULSE_INTERRUPT_MODE);
 
 domain::TripCounter trip1;
 ui::DisplayView view;
@@ -54,6 +58,7 @@ void setup() {
   downButton.begin();
   rightButton.begin();
   tripResetButton.begin();
+  pulseInput.begin();
 
   view.begin();
   view.showTrip(trip1.value());
@@ -74,17 +79,24 @@ void loop() {
   const bool downPressed = downButton.consumePressedEvent();
   const bool rightPressed = rightButton.consumePressedEvent();
   const bool resetPressed = tripResetButton.consumePressedEvent();
+  const uint32_t pulses = pulseInput.consumePulses();
 
   logPressedEvent("GPIO1 VASEN", leftPressed);
   logPressedEvent("GPIO2 YLOS", upPressed);
   logPressedEvent("GPIO3 ALAS", downPressed);
   logPressedEvent("GPIO10 OIKEA", rightPressed);
   logPressedEvent("GPIO14 RESET", resetPressed);
+  if (pulses > 0) {
+    Serial.printf("GPIO16 pulses: %lu\n", static_cast<unsigned long>(pulses));
+  }
 
   if (resetPressed) {
     trip1.reset();
-  } else if (rightPressed) {
-    trip1.incrementTestStep();
+  } else {
+    if (rightPressed) {
+      trip1.incrementTestStep();
+    }
+    trip1.addTestSteps(pulses);
   }
 
   view.showTrip(trip1.value());

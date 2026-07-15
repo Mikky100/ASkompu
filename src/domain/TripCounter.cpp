@@ -5,9 +5,12 @@
 namespace domain {
 
 void TripCounter::incrementTestStep() {
-  if (value_ < std::numeric_limits<uint32_t>::max()) {
-    ++value_;
-  }
+  addTestSteps(1);
+}
+
+void TripCounter::addTestSteps(uint32_t steps) {
+  const uint32_t maximum = std::numeric_limits<uint32_t>::max();
+  value_ = steps > maximum - value_ ? maximum : value_ + steps;
 }
 
 void TripCounter::reset() {
@@ -15,4 +18,3 @@ void TripCounter::reset() {
 }
 
 }  // namespace domain
-
