@@ -4,17 +4,26 @@
 
 namespace domain {
 
-void TripCounter::incrementTestStep() {
-  addTestSteps(1);
-}
+TripCounter::TripCounter(uint32_t millimetersPerPulse)
+    : millimetersPerPulse_(millimetersPerPulse) {}
 
-void TripCounter::addTestSteps(uint32_t steps) {
-  const uint32_t maximum = std::numeric_limits<uint32_t>::max();
-  value_ = steps > maximum - value_ ? maximum : value_ + steps;
+void TripCounter::addPulses(uint32_t pulses) {
+  const uint64_t maximum = std::numeric_limits<uint64_t>::max();
+  const uint64_t pulseIncrement = pulses;
+  const uint64_t distanceIncrement =
+      pulseIncrement * static_cast<uint64_t>(millimetersPerPulse_);
+
+  pulseCount_ = pulseIncrement > maximum - pulseCount_
+                    ? maximum
+                    : pulseCount_ + pulseIncrement;
+  distanceMillimeters_ = distanceIncrement > maximum - distanceMillimeters_
+                             ? maximum
+                             : distanceMillimeters_ + distanceIncrement;
 }
 
 void TripCounter::reset() {
-  value_ = 0;
+  distanceMillimeters_ = 0;
+  pulseCount_ = 0;
 }
 
 }  // namespace domain

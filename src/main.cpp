@@ -32,7 +32,7 @@ input::PulseInput pulseInput(BoardConfig::PIN_PULSE_INPUT,
                              BoardConfig::PULSE_INPUT_MODE,
                              BoardConfig::PULSE_INTERRUPT_MODE);
 
-domain::TripCounter trip1;
+domain::TripCounter trip1(DemoConfig::millimetersPerPulse);
 domain::SpeedCalculator speedCalculator(DemoConfig::millimetersPerPulse,
                                         DemoConfig::zeroSpeedTimeoutUs);
 ui::DisplayView view;
@@ -67,7 +67,7 @@ void setup() {
 
   view.begin();
   view.showSpeed(0.0F);
-  view.showPulseCounts(0, trip1.value());
+  view.showDiagnostics(0, trip1.distanceMillimeters());
   updateButtonStatesOnDisplay();
 }
 
@@ -99,13 +99,10 @@ void loop() {
                   static_cast<unsigned long>(pulseSnapshot.totalPulses));
   }
 
-  if (resetPressed) {
+  if (tripResetButton.isPressed()) {
     trip1.reset();
   } else {
-    if (rightPressed) {
-      trip1.incrementTestStep();
-    }
-    trip1.addTestSteps(pulseSnapshot.pendingPulses);
+    trip1.addPulses(pulseSnapshot.pendingPulses);
   }
 
   speedCalculator.update(nowUs, pulseSnapshot.totalPulses,
@@ -115,7 +112,8 @@ void loop() {
   if (nowMs - lastDisplayUpdateMs >= DemoConfig::displayUpdateIntervalMs) {
     lastDisplayUpdateMs = nowMs;
     view.showSpeed(speedCalculator.speedKmh());
-    view.showPulseCounts(pulseSnapshot.totalPulses, trip1.value());
+    view.showDiagnostics(pulseSnapshot.totalPulses,
+                         trip1.distanceMillimeters());
   }
   updateButtonStatesOnDisplay();
 

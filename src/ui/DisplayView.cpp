@@ -1,5 +1,6 @@
 #include "DisplayView.h"
 
+#include <inttypes.h>
 #include <cstdio>
 
 #include "BoardConfig.h"
@@ -78,21 +79,28 @@ void DisplayView::showSpeed(float speedKmh) {
   display_.setTextSize(1);
 }
 
-void DisplayView::showPulseCounts(uint32_t totalPulses,
-                                  uint32_t tripPulses) {
+void DisplayView::showDiagnostics(uint32_t totalPulses,
+                                  uint64_t tripDistanceMm) {
   if (totalPulses == displayedTotalPulses_ &&
-      tripPulses == displayedTripPulses_) {
+      tripDistanceMm == displayedTripDistanceMm_) {
     return;
   }
   displayedTotalPulses_ = totalPulses;
-  displayedTripPulses_ = tripPulses;
+  displayedTripDistanceMm_ = tripDistanceMm;
 
   char totalText[11];
-  char tripText[11];
+  char tripText[24];
   std::snprintf(totalText, sizeof(totalText), "%lu",
                 static_cast<unsigned long>(totalPulses));
-  std::snprintf(tripText, sizeof(tripText), "%lu",
-                static_cast<unsigned long>(tripPulses));
+  if (tripDistanceMm < 10000000ULL) {
+    const uint64_t wholeMeters = tripDistanceMm / 1000ULL;
+    std::snprintf(tripText, sizeof(tripText), "%" PRIu64 ".%03" PRIu64,
+                  wholeMeters / 1000ULL, wholeMeters % 1000ULL);
+  } else {
+    const uint64_t wholeTenMeters = tripDistanceMm / 10000ULL;
+    std::snprintf(tripText, sizeof(tripText), "%" PRIu64 ".%02" PRIu64,
+                  wholeTenMeters / 100ULL, wholeTenMeters % 100ULL);
+  }
 
   display_.fillRect(0, DIAGNOSTIC_AREA_TOP,
                     BoardConfig::DISPLAY_WIDTH / 2 - 1,

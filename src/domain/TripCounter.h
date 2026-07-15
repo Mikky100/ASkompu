@@ -6,13 +6,17 @@ namespace domain {
 
 class TripCounter {
  public:
-  void incrementTestStep();
-  void addTestSteps(uint32_t steps);
+  explicit TripCounter(uint32_t millimetersPerPulse);
+
+  void addPulses(uint32_t pulses);
   void reset();
-  uint32_t value() const { return value_; }
+  uint64_t distanceMillimeters() const { return distanceMillimeters_; }
+  uint64_t pulseCount() const { return pulseCount_; }
 
  private:
-  uint32_t value_ = 0;
+  const uint32_t millimetersPerPulse_;
+  uint64_t distanceMillimeters_ = 0;
+  uint64_t pulseCount_ = 0;
 };
 
 }  // namespace domain
