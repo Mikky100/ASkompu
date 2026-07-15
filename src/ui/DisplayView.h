@@ -17,17 +17,19 @@ enum class ButtonIndicator : uint8_t {
 class DisplayView {
  public:
   void begin();
-  void showTrip(uint32_t value);
+  void showSpeed(float speedKmh);
+  void showPulseCounts(uint32_t totalPulses, uint32_t tripPulses);
   void showButtonState(ButtonIndicator indicator, bool pressed);
 
  private:
   void drawButton(ButtonIndicator indicator, bool pressed);
 
   TFT_eSPI display_;
-  uint32_t displayedTrip_ = UINT32_MAX;
+  uint32_t displayedSpeedTenths_ = UINT32_MAX;
+  uint32_t displayedTotalPulses_ = UINT32_MAX;
+  uint32_t displayedTripPulses_ = UINT32_MAX;
   bool displayedButtonStates_[static_cast<uint8_t>(ButtonIndicator::Count)]{};
   bool buttonStateInitialized_[static_cast<uint8_t>(ButtonIndicator::Count)]{};
 };
 
 }  // namespace ui
-

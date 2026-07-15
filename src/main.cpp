@@ -1,6 +1,8 @@
 #include <Arduino.h>
 
 #include "BoardConfig.h"
+#include "DemoConfig.h"
+#include "domain/SpeedCalculator.h"
 #include "domain/TripCounter.h"
 #include "input/DebouncedButton.h"
 #include "input/PulseInput.h"
@@ -31,7 +33,10 @@ input::PulseInput pulseInput(BoardConfig::PIN_PULSE_INPUT,
                              BoardConfig::PULSE_INTERRUPT_MODE);
 
 domain::TripCounter trip1;
+domain::SpeedCalculator speedCalculator(DemoConfig::millimetersPerPulse,
+                                        DemoConfig::zeroSpeedTimeoutUs);
 ui::DisplayView view;
+uint32_t lastDisplayUpdateMs = 0;
 
 void updateButtonStatesOnDisplay() {
   view.showButtonState(ui::ButtonIndicator::Left, leftButton.isPressed());
@@ -61,7 +66,8 @@ void setup() {
   pulseInput.begin();
 
   view.begin();
-  view.showTrip(trip1.value());
+  view.showSpeed(0.0F);
+  view.showPulseCounts(0, trip1.value());
   updateButtonStatesOnDisplay();
 }
 
@@ -79,15 +85,18 @@ void loop() {
   const bool downPressed = downButton.consumePressedEvent();
   const bool rightPressed = rightButton.consumePressedEvent();
   const bool resetPressed = tripResetButton.consumePressedEvent();
-  const uint32_t pulses = pulseInput.consumePulses();
+  const input::PulseSnapshot pulseSnapshot = pulseInput.consumeSnapshot();
+  const uint32_t nowUs = micros();
 
   logPressedEvent("GPIO1 VASEN", leftPressed);
   logPressedEvent("GPIO2 YLOS", upPressed);
   logPressedEvent("GPIO3 ALAS", downPressed);
   logPressedEvent("GPIO10 OIKEA", rightPressed);
   logPressedEvent("GPIO14 RESET", resetPressed);
-  if (pulses > 0) {
-    Serial.printf("GPIO16 pulses: %lu\n", static_cast<unsigned long>(pulses));
+  if (pulseSnapshot.pendingPulses > 0) {
+    Serial.printf("GPIO16 pulses: %lu, total: %lu\n",
+                  static_cast<unsigned long>(pulseSnapshot.pendingPulses),
+                  static_cast<unsigned long>(pulseSnapshot.totalPulses));
   }
 
   if (resetPressed) {
@@ -96,10 +105,18 @@ void loop() {
     if (rightPressed) {
       trip1.incrementTestStep();
     }
-    trip1.addTestSteps(pulses);
+    trip1.addTestSteps(pulseSnapshot.pendingPulses);
   }
 
-  view.showTrip(trip1.value());
+  speedCalculator.update(nowUs, pulseSnapshot.totalPulses,
+                         pulseSnapshot.previousPulseAtUs,
+                         pulseSnapshot.lastPulseAtUs);
+
+  if (nowMs - lastDisplayUpdateMs >= DemoConfig::displayUpdateIntervalMs) {
+    lastDisplayUpdateMs = nowMs;
+    view.showSpeed(speedCalculator.speedKmh());
+    view.showPulseCounts(pulseSnapshot.totalPulses, trip1.value());
+  }
   updateButtonStatesOnDisplay();
 
   delay(POLL_INTERVAL_MS);

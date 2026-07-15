@@ -11,12 +11,13 @@ void PulseInput::begin() {
                      interruptMode_);
 }
 
-uint32_t PulseInput::consumePulses() {
+PulseSnapshot PulseInput::consumeSnapshot() {
   portENTER_CRITICAL(&mux_);
-  const uint32_t pulses = pendingPulses_;
+  const PulseSnapshot snapshot = {
+      pendingPulses_, totalPulses_, previousPulseAtUs_, lastPulseAtUs_};
   pendingPulses_ = 0;
   portEXIT_CRITICAL(&mux_);
-  return pulses;
+  return snapshot;
 }
 
 void IRAM_ATTR PulseInput::interruptHandler(void* argument) {
@@ -24,10 +25,17 @@ void IRAM_ATTR PulseInput::interruptHandler(void* argument) {
 }
 
 void IRAM_ATTR PulseInput::onPulse() {
+  const uint32_t timestampUs = micros();
+
   portENTER_CRITICAL_ISR(&mux_);
   if (pendingPulses_ != UINT32_MAX) {
     ++pendingPulses_;
   }
+  if (totalPulses_ != UINT32_MAX) {
+    ++totalPulses_;
+  }
+  previousPulseAtUs_ = lastPulseAtUs_;
+  lastPulseAtUs_ = timestampUs;
   portEXIT_CRITICAL_ISR(&mux_);
 }
 
