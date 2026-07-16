@@ -9,6 +9,33 @@
 namespace core {
 namespace {
 
+domain::EventClockTime eventClock(const ClockTime& value) {
+  return {value.hour, value.minute, value.second};
+}
+
+int64_t signedMagnitude(int64_t value) {
+  if (value == std::numeric_limits<int64_t>::min())
+    return std::numeric_limits<int64_t>::max();
+  return value < 0 ? -value : value;
+}
+
+uint32_t millisecondsOfDay(const ClockTime& value) {
+  return (static_cast<uint32_t>(value.hour) * 3600UL +
+          static_cast<uint32_t>(value.minute) * 60UL + value.second) *
+         1000UL;
+}
+
+domain::EventClockTime addClockMinutes(domain::EventClockTime value,
+                                       int8_t minutes) {
+  int32_t total = static_cast<int32_t>(value.hour) * 60 + value.minute + minutes;
+  total %= 24 * 60;
+  if (total < 0) total += 24 * 60;
+  value.hour = static_cast<uint8_t>(total / 60);
+  value.minute = static_cast<uint8_t>(total % 60);
+  value.second = 0;
+  return value;
+}
+
 struct MenuItem {
   const char* label;
   bool enabled;
@@ -23,9 +50,9 @@ constexpr MenuItem MAIN_ITEMS[] = {
     {"TRIPIT", true},
     {"JARJESTELMA", true},
 };
-constexpr MenuItem RESULT_ITEMS[] = {{"JAKSOJEN PISTEET", false},
-                                     {"KOKONAISPISTEET", false},
-                                     {"TAPAHTUMAT", false}};
+constexpr MenuItem RESULT_ITEMS[] = {{"JAKSOJEN PISTEET", true},
+                                     {"KOKONAISPISTEET", true},
+                                     {"TAPAHTUMAT", true}};
 constexpr MenuItem DISPLAY_ITEMS[] = {{"NAYTTOPROFIILI", false},
                                       {"NAYTTOSELITTEET", false},
                                       {"AIKAERON MUOTO", false},
@@ -157,31 +184,115 @@ void ApplicationCore::handleButton(const ButtonEvent& event) {
 
   if (event.buttonId == ButtonId::Point &&
       event.eventType == ButtonEventType::Release &&
+      screen_ == Screen::StartTimeEdit &&
+      !startTimeCorrection_ &&
+      competition_.pendingJatType() == domain::JatType::EMIT_JAT_OFFSET) {
+    acceptJatStartTime();
+    return;
+  }
+
+  if (event.buttonId == ButtonId::Point &&
+      event.eventType == ButtonEventType::Release &&
       screen_ == Screen::BasicView) {
-    pointLongPressNotImplemented_ = false;
+    const uint16_t endedSegment = competition_.currentSegmentIndex();
     const domain::PointResult result =
-        competition_.pointReleased(clock_.elapsedSinceSetMilliseconds());
+        competition_.pointReleased(clock_.elapsedSinceSetMilliseconds(),
+                                   millimetersPerPulse_, eventClock(clock_.now()),
+                                   competitionSettings_);
     if (result == domain::PointResult::FINISHED) {
+      domain::EventRecord record = makeEvent(domain::DomainEventType::FINISH);
+      record.segmentIndex = endedSegment;
+      const std::vector<domain::StageResult>& results =
+          competition_.stageResults();
+      if (!results.empty()) {
+        record.stageIndex = results.back().stageIndex;
+        record.payload.hasStageResult = true;
+        record.payload.stageResult = results.back();
+        record.payload.finalDeltaMs = competition_.finalDeltaMs();
+      }
+      appendEvent(record);
       routeOrderCompletionPending_ = true;
+    } else if (result == domain::PointResult::MITTIS_PROPOSAL) {
+      domain::EventRecord record =
+          makeEvent(domain::DomainEventType::MITTIS_PROPOSED);
+      record.segmentIndex = endedSegment;
+      record.payload.oldCalibration = millimetersPerPulse_;
+      record.payload.proposedCalibration =
+          competition_.mittisProposal().proposedMillimetersPerPulse;
+      appendEvent(record);
+      calibrationSaveFailed_ = false;
+      screen_ = Screen::MittisProposal;
+    } else if (result == domain::PointResult::ADVANCED) {
+      domain::EventRecord record =
+          makeEvent(domain::DomainEventType::NORMAL_POINT);
+      record.segmentIndex = endedSegment;
+      lastPointEventId_ = appendEvent(record);
+    } else if (result == domain::PointResult::JAT_COMPLETED) {
+      domain::EventRecord record = makeEvent(domain::DomainEventType::JAT);
+      record.segmentIndex = endedSegment;
+      record.payload.arrivalClockTime = competition_.arrivalClockTime();
+      record.payload.finalDeltaMs = competition_.finalDeltaMs();
+      record.payload.hasJatType = true;
+      record.payload.jatType = competition_.pendingJatType();
+      const std::vector<domain::StageResult>& results =
+          competition_.stageResults();
+      if (!results.empty()) {
+        record.stageIndex = results.back().stageIndex;
+        record.payload.hasStageResult = true;
+        record.payload.stageResult = results.back();
+      }
+      appendEvent(record);
+      resetTrip1();
+      if (competition_.state() == domain::CompetitionState::EDIT_START_TIME)
+        beginJatStartTimeEdit();
+      else
+        screen_ = Screen::JatResult;
     }
     return;
   }
   if (event.buttonId == ButtonId::Point &&
       event.eventType == ButtonEventType::LongStart) {
-    pointLongPressNotImplemented_ = true;
+    if (screen_ == Screen::BasicView &&
+        competition_.state() == domain::CompetitionState::RUNNING) {
+      overrideMenuAction_ = OverrideMenuAction::AdditionalOrder;
+      screen_ = Screen::OverrideMenu;
+    }
     return;
   }
   if (event.buttonId == ButtonId::At &&
       event.eventType == ButtonEventType::Release) {
-    atNotImplemented_ = true;
+    handleAtRelease();
     return;
   }
   if (event.buttonId == ButtonId::Left &&
       event.eventType == ButtonEventType::Press &&
       screen_ == Screen::BasicView &&
       competition_.undoPoint(clock_.elapsedSinceSetMilliseconds())) {
+    if (lastPointEventId_ != 0)
+      eventRepository_.markCancelled(lastPointEventId_);
+    domain::EventRecord undo = makeEvent(domain::DomainEventType::POINT_UNDO);
+    undo.payload.referencedEventId = lastPointEventId_;
+    appendEvent(undo);
     return;
   }
+  if (event.buttonId == ButtonId::Left &&
+      event.eventType == ButtonEventType::LongStart &&
+      screen_ == Screen::MittisProposal) {
+    handleMittisProposal(
+        {ButtonId::Left, ButtonEventType::Press, event.monotonicMs});
+    return;
+  }
+  if (event.buttonId == ButtonId::Left &&
+      event.eventType == ButtonEventType::LongStart &&
+      screen_ == Screen::StartTimeEdit) {
+    handleStartTimeEdit(
+        {ButtonId::Left, ButtonEventType::Press, event.monotonicMs});
+    return;
+  }
+  if (event.buttonId == ButtonId::Left &&
+      event.eventType == ButtonEventType::LongStart &&
+      screen_ == Screen::JatResult)
+    return;
 
   if (event.eventType == ButtonEventType::LongStart &&
       event.buttonId == ButtonId::Left &&
@@ -213,6 +324,24 @@ void ApplicationCore::handleButton(const ButtonEvent& event) {
     case Screen::CalibrationEdit:
       handleCalibration(event);
       break;
+    case Screen::MittisProposal:
+      handleMittisProposal(event);
+      break;
+    case Screen::JatResult:
+      handleJatResult(event);
+      break;
+    case Screen::StartTimeEdit:
+      handleStartTimeEdit(event);
+      break;
+    case Screen::OverrideMenu:
+      handleOverrideMenu(event);
+      break;
+    case Screen::OverrideEdit:
+      handleOverrideEdit(event);
+      break;
+    case Screen::ResultView:
+      handleResultView(event);
+      break;
     case Screen::OrderAccessPrompt:
       handleOrderAccessPrompt(event);
       break;
@@ -226,6 +355,291 @@ void ApplicationCore::handleButton(const ButtonEvent& event) {
       }
       break;
   }
+}
+
+void ApplicationCore::handleResultView(const ButtonEvent& event) {
+  const bool step = event.eventType == ButtonEventType::Press ||
+                    event.eventType == ButtonEventType::LongRepeat;
+  const size_t count = resultViewType_ == ResultViewType::StageResults
+                           ? competition_.stageResults().size()
+                           : (resultViewType_ == ResultViewType::Events
+                                  ? eventRepository_.count()
+                                  : 1);
+  if (step && event.buttonId == ButtonId::Up && resultSelectedIndex_ > 0)
+    --resultSelectedIndex_;
+  else if (step && event.buttonId == ButtonId::Down &&
+           resultSelectedIndex_ + 1 < count)
+    ++resultSelectedIndex_;
+  else if (event.eventType == ButtonEventType::Press &&
+           event.buttonId == ButtonId::Left) {
+    openSubmenu(MenuPage::Results);
+    menuSelectedIndex_ = static_cast<uint8_t>(resultViewType_);
+  }
+}
+
+void ApplicationCore::handleOverrideMenu(const ButtonEvent& event) {
+  const bool step = event.eventType == ButtonEventType::Press ||
+                    event.eventType == ButtonEventType::LongRepeat;
+  if (step && (event.buttonId == ButtonId::Up ||
+               event.buttonId == ButtonId::Down)) {
+    overrideMenuAction_ =
+        overrideMenuAction_ == OverrideMenuAction::AdditionalOrder
+            ? OverrideMenuAction::RoadBreak
+            : OverrideMenuAction::AdditionalOrder;
+  } else if (event.eventType == ButtonEventType::Press &&
+             event.buttonId == ButtonId::Left) {
+    screen_ = Screen::BasicView;
+  } else if (event.eventType == ButtonEventType::Press &&
+             event.buttonId == ButtonId::Right) {
+    beginOverrideEdit();
+  }
+}
+
+void ApplicationCore::beginOverrideEdit() {
+  overrideStartSegmentIndex_ = competition_.currentSegmentIndex();
+  overrideMaximumEndPointIndex_ =
+      competition_.nextJatOrFinishPointIndex(overrideStartSegmentIndex_);
+  overrideEndPointIndex_ = overrideStartSegmentIndex_ + 1;
+  overrideDurationSeconds_ =
+      overrideMenuAction_ == OverrideMenuAction::RoadBreak ? 660 : 60;
+  overrideEditPhase_ =
+      overrideMenuAction_ == OverrideMenuAction::RoadBreak
+          ? OverrideEditPhase::Duration
+          : OverrideEditPhase::StartSegment;
+  overrideInvalid_ = false;
+  screen_ = Screen::OverrideEdit;
+}
+
+void ApplicationCore::handleOverrideEdit(const ButtonEvent& event) {
+  const bool step = event.eventType == ButtonEventType::Press ||
+                    event.eventType == ButtonEventType::LongRepeat;
+  if (step && (event.buttonId == ButtonId::Up ||
+               event.buttonId == ButtonId::Down)) {
+    const bool up = event.buttonId == ButtonId::Up;
+    if (overrideEditPhase_ == OverrideEditPhase::StartSegment) {
+      const uint16_t current = competition_.currentSegmentIndex();
+      const uint16_t lastStart = overrideMaximumEndPointIndex_ > 0
+                                     ? overrideMaximumEndPointIndex_ - 1
+                                     : current;
+      if (up && overrideStartSegmentIndex_ < lastStart)
+        ++overrideStartSegmentIndex_;
+      else if (!up && overrideStartSegmentIndex_ > current)
+        --overrideStartSegmentIndex_;
+      overrideEndPointIndex_ = overrideStartSegmentIndex_ + 1;
+      overrideMaximumEndPointIndex_ =
+          competition_.nextJatOrFinishPointIndex(overrideStartSegmentIndex_);
+    } else if (overrideEditPhase_ == OverrideEditPhase::Duration) {
+      if (overrideMenuAction_ == OverrideMenuAction::RoadBreak) {
+        static const uint16_t DURATIONS[] = {660, 1260, 1860};
+        uint8_t selected = overrideDurationSeconds_ == 660
+                               ? 0
+                               : (overrideDurationSeconds_ == 1260 ? 1 : 2);
+        selected = static_cast<uint8_t>((selected + (up ? 1 : 2)) % 3);
+        overrideDurationSeconds_ = DURATIONS[selected];
+      } else if (up && overrideDurationSeconds_ < 3599) {
+        ++overrideDurationSeconds_;
+      } else if (!up && overrideDurationSeconds_ > 1) {
+        --overrideDurationSeconds_;
+      }
+    } else if (overrideEditPhase_ == OverrideEditPhase::EndPoint) {
+      if (up && overrideEndPointIndex_ < overrideMaximumEndPointIndex_)
+        ++overrideEndPointIndex_;
+      else if (!up &&
+               overrideEndPointIndex_ > overrideStartSegmentIndex_ + 1)
+        --overrideEndPointIndex_;
+    }
+    overrideInvalid_ = false;
+    return;
+  }
+  if (event.eventType != ButtonEventType::Press) return;
+  if (event.buttonId == ButtonId::Left) {
+    if (overrideEditPhase_ == OverrideEditPhase::EndPoint)
+      overrideEditPhase_ = OverrideEditPhase::Duration;
+    else if (overrideEditPhase_ == OverrideEditPhase::Duration &&
+             overrideMenuAction_ == OverrideMenuAction::AdditionalOrder)
+      overrideEditPhase_ = OverrideEditPhase::StartSegment;
+    else
+      screen_ = Screen::OverrideMenu;
+  } else if (event.buttonId == ButtonId::Right) {
+    if (overrideEditPhase_ == OverrideEditPhase::StartSegment)
+      overrideEditPhase_ = OverrideEditPhase::Duration;
+    else if (overrideEditPhase_ == OverrideEditPhase::Duration)
+      overrideEditPhase_ = OverrideEditPhase::EndPoint;
+    else
+      acceptOverride();
+  }
+}
+
+void ApplicationCore::acceptOverride() {
+  domain::SegmentOverride requested;
+  requested.overrideType =
+      overrideMenuAction_ == OverrideMenuAction::AdditionalOrder
+          ? domain::OverrideType::ADDITIONAL_ORDER
+          : domain::OverrideType::ROAD_BREAK;
+  requested.startSegmentIndex = overrideStartSegmentIndex_;
+  requested.endPointIndex = overrideEndPointIndex_;
+  requested.replacementDurationSeconds = overrideDurationSeconds_;
+  requested.acceptedClockTime =
+      eventClock(clock_.isSet() ? clock_.now() : ClockTime{0, 0, 0});
+  domain::SegmentOverride accepted;
+  if (!competition_.applyOverride(requested, accepted)) {
+    overrideInvalid_ = true;
+    return;
+  }
+  domain::EventRecord record = makeEvent(
+      requested.overrideType == domain::OverrideType::ADDITIONAL_ORDER
+          ? domain::DomainEventType::ADDITIONAL_ORDER
+          : domain::DomainEventType::ROAD_BREAK);
+  record.payload.hasOverride = true;
+  record.payload.segmentOverride = accepted;
+  appendEvent(record);
+  screen_ = Screen::BasicView;
+}
+
+void ApplicationCore::handleJatResult(const ButtonEvent& event) {
+  if (event.eventType == ButtonEventType::Press &&
+      event.buttonId == ButtonId::Right) {
+    competition_.dismissJatResult(clock_.elapsedSinceSetMilliseconds());
+    beginJatStartTimeEdit();
+  }
+}
+
+void ApplicationCore::beginJatStartTimeEdit() {
+  startTimeCorrection_ = false;
+  editedStageStartTime_ = competition_.proposedStartClockTime();
+  originalStageStartProposal_ = editedStageStartTime_;
+  emitOffsetAdjustmentMinutes_ = 0;
+  stageStartProposalExpired_ = false;
+  domain::EventRecord proposal =
+      makeEvent(domain::DomainEventType::START_TIME_PROPOSED);
+  proposal.payload.proposedStartClockTime = editedStageStartTime_;
+  appendEvent(proposal);
+  screen_ = Screen::StartTimeEdit;
+}
+
+void ApplicationCore::handleStartTimeEdit(const ButtonEvent& event) {
+  const bool step = event.eventType == ButtonEventType::Press ||
+                    event.eventType == ButtonEventType::LongRepeat;
+  if (step && (event.buttonId == ButtonId::Up ||
+               event.buttonId == ButtonId::Down)) {
+    const int8_t direction = event.buttonId == ButtonId::Up ? 1 : -1;
+    if (competition_.pendingJatType() == domain::JatType::EMIT_JAT_OFFSET) {
+      const int8_t candidate = emitOffsetAdjustmentMinutes_ + direction;
+      if (candidate >= -2 && candidate <= 2) {
+        emitOffsetAdjustmentMinutes_ = candidate;
+        editedStageStartTime_ =
+            addClockMinutes(originalStageStartProposal_, candidate);
+      }
+    } else {
+      editedStageStartTime_ = addClockMinutes(editedStageStartTime_, direction);
+    }
+    stageStartProposalExpired_ = false;
+    return;
+  }
+  if (event.eventType != ButtonEventType::Press) return;
+  if (event.buttonId == ButtonId::Left) {
+    if (startTimeCorrection_) {
+      competition_.rejectStartTimeCorrection(
+          clock_.elapsedSinceSetMilliseconds());
+      startTimeCorrection_ = false;
+      screen_ = Screen::BasicView;
+      return;
+    }
+    editedStageStartTime_ = originalStageStartProposal_;
+    emitOffsetAdjustmentMinutes_ = 0;
+    stageStartProposalExpired_ = false;
+  } else if (event.buttonId == ButtonId::Right &&
+             (startTimeCorrection_ ||
+              competition_.pendingJatType() !=
+                  domain::JatType::EMIT_JAT_OFFSET)) {
+    acceptJatStartTime();
+  }
+}
+
+void ApplicationCore::acceptJatStartTime() {
+  if (!clock_.isSet()) return;
+  const bool correction = startTimeCorrection_;
+  const domain::JatType jatType = competition_.pendingJatType();
+  const ClockTime now = clock_.now();
+  if (!competition_.acceptNextStageStart(
+          editedStageStartTime_, millisecondsOfDay(now),
+          clock_.elapsedSinceSetMilliseconds()))
+    return;
+  domain::EventRecord accepted = makeEvent(
+      startTimeCorrection_ ? domain::DomainEventType::START_TIME_CORRECTED
+                           : domain::DomainEventType::START_TIME_ACCEPTED);
+  accepted.payload.acceptedStartClockTime = editedStageStartTime_;
+  appendEvent(accepted);
+  if (!correction && (jatType == domain::JatType::EMIT_MLA ||
+                      jatType == domain::JatType::EMIT_ULA))
+    resetTrip1();
+  startTimeCorrection_ = false;
+  screen_ = Screen::BasicView;
+}
+
+void ApplicationCore::handleMittisProposal(const ButtonEvent& event) {
+  if (event.eventType != ButtonEventType::Press) return;
+  if (event.buttonId == ButtonId::Left) {
+    appendEvent(makeEvent(domain::DomainEventType::MITTIS_REJECTED));
+    const uint16_t endedSegment = competition_.currentSegmentIndex();
+    const domain::PointResult result = competition_.resolveMittisProposal();
+    calibrationSaveFailed_ = false;
+    completeMittisPoint(result, endedSegment);
+  } else if (event.buttonId == ButtonId::Right &&
+             competition_.mittisProposal().valid &&
+             !calibrationSaveInFlight_) {
+    editedMillimetersPerPulse_ =
+        competition_.mittisProposal().proposedMillimetersPerPulse;
+    mittisCalibrationSave_ = true;
+    calibrationSavePending_ = true;
+    calibrationSaveFailed_ = false;
+  }
+}
+
+void ApplicationCore::completeMittisPoint(domain::PointResult result,
+                                          uint16_t endedSegment) {
+  if (result == domain::PointResult::ADVANCED) {
+    domain::EventRecord point =
+        makeEvent(domain::DomainEventType::NORMAL_POINT);
+    point.segmentIndex = endedSegment;
+    lastPointEventId_ = appendEvent(point);
+    screen_ = Screen::BasicView;
+    return;
+  }
+  if (result == domain::PointResult::FINISHED ||
+      result == domain::PointResult::JAT_COMPLETED) {
+    const bool finish = result == domain::PointResult::FINISHED;
+    domain::EventRecord record = makeEvent(
+        finish ? domain::DomainEventType::FINISH : domain::DomainEventType::JAT);
+    record.segmentIndex = endedSegment;
+    record.payload.finalDeltaMs = competition_.finalDeltaMs();
+    const std::vector<domain::StageResult>& results =
+        competition_.stageResults();
+    if (!results.empty()) {
+      record.stageIndex = results.back().stageIndex;
+      record.payload.hasStageResult = true;
+      record.payload.stageResult = results.back();
+    }
+    if (!finish) {
+      record.payload.arrivalClockTime = competition_.arrivalClockTime();
+      record.payload.hasJatType = true;
+      record.payload.jatType = competition_.pendingJatType();
+    }
+    appendEvent(record);
+    if (finish) {
+      routeOrderCompletionPending_ = true;
+      screen_ = Screen::BasicView;
+    } else {
+      resetTrip1();
+      if (competition_.state() ==
+          domain::CompetitionState::EDIT_START_TIME)
+        beginJatStartTimeEdit();
+      else
+        screen_ = Screen::JatResult;
+    }
+    return;
+  }
+  screen_ = Screen::BasicView;
 }
 
 void ApplicationCore::handleTimeEntry(const ButtonEvent& event) {
@@ -272,6 +686,14 @@ void ApplicationCore::handleBasicView(const ButtonEvent& event) {
     openMainMenu(0);
   } else if (event.buttonId == ButtonId::Up) {
     openMainMenu(countOf(MAIN_ITEMS) - 1);
+  } else if (event.buttonId == ButtonId::Right &&
+             competition_.beginStartTimeCorrection()) {
+    editedStageStartTime_ = competition_.proposedStartClockTime();
+    originalStageStartProposal_ = editedStageStartTime_;
+    emitOffsetAdjustmentMinutes_ = 0;
+    stageStartProposalExpired_ = false;
+    startTimeCorrection_ = true;
+    screen_ = Screen::StartTimeEdit;
   }
 }
 
@@ -451,6 +873,10 @@ void ApplicationCore::activateMenuItem() {
   } else if (menuPage_ == MenuPage::TextColor) {
     editedTextColor_ = static_cast<domain::TextColor>(menuSelectedIndex_);
     textColorSavePending_ = true;
+  } else if (menuPage_ == MenuPage::Results) {
+    resultViewType_ = static_cast<ResultViewType>(menuSelectedIndex_);
+    resultSelectedIndex_ = 0;
+    screen_ = Screen::ResultView;
   } else if (menuPage_ == MenuPage::Trips) {
     if (menuSelectedIndex_ == 0) {
       resetTrip1();
@@ -479,11 +905,17 @@ void ApplicationCore::beginTimeEdit(bool startup) {
 void ApplicationCore::resetTrip1() {
   trip1DistanceMm_ = 0;
   trip1PulseCount_ = 0;
+  domain::EventRecord record = makeEvent(domain::DomainEventType::TRIP_RESET);
+  record.payload.tripChannel = domain::TripChannel::TRIP_1;
+  appendEvent(record);
 }
 
 void ApplicationCore::resetTrip2() {
   trip2DistanceMm_ = 0;
   trip2PulseCount_ = 0;
+  domain::EventRecord record = makeEvent(domain::DomainEventType::TRIP_RESET);
+  record.payload.tripChannel = domain::TripChannel::TRIP_2;
+  appendEvent(record);
 }
 
 void ApplicationCore::handleDistancePulses(const DistancePulseEvent& event) {
@@ -502,6 +934,13 @@ void ApplicationCore::handleDistancePulses(const DistancePulseEvent& event) {
   totalPulseCount_ =
       domain::motion::saturatingAdd(totalPulseCount_, event.pulseCount);
   addDistance(distanceDelta, event.pulseCount);
+  if (atOverlayVisible_ && atDistanceArmed_) {
+    atTravelledDistanceMm_ = domain::motion::saturatingAddSigned(
+        atTravelledDistanceMm_, signedMagnitude(distanceDelta));
+    const int64_t target =
+        static_cast<int64_t>(competitionSettings_.atDisplayDistanceM) * 1000LL;
+    if (atTravelledDistanceMm_ >= target) atOverlayVisible_ = false;
+  }
   competition_.addDistanceMillimeters(distanceDelta);
   if (event.pulseCount > 0) {
     previousPulseAtUs_ = event.previousPulseAtUs;
@@ -517,9 +956,13 @@ void ApplicationCore::handleDistancePulses(const DistancePulseEvent& event) {
 }
 
 void ApplicationCore::handleReverseSignal(const ReverseSignalEvent& event) {
-  (void)event.monotonicMs;
+  if (reverseActive_ == event.reverseActive) return;
   reverseActive_ = event.reverseActive;
   competition_.setReverseActive(reverseActive_);
+  domain::EventRecord record = makeEvent(domain::DomainEventType::REVERSE_CHANGED);
+  record.monotonicTimeMs = event.monotonicMs;
+  record.payload.reverseActive = reverseActive_;
+  appendEvent(record);
 }
 
 void ApplicationCore::tick(uint32_t nowUs) {
@@ -532,7 +975,37 @@ void ApplicationCore::tick(uint32_t nowUs) {
                           lastPulseAtUs_);
   if (clock_.isSet()) {
     clock_.now();
+    const domain::CompetitionState before = competition_.state();
     competition_.tick(clock_.elapsedSinceSetMilliseconds());
+    if (before == domain::CompetitionState::JAT_RESULT &&
+        competition_.state() == domain::CompetitionState::EDIT_START_TIME)
+      beginJatStartTimeEdit();
+    if (screen_ == Screen::StartTimeEdit) {
+      const ClockTime nowClock = clock_.now();
+      const int32_t nowMinutes = nowClock.hour * 60 + nowClock.minute;
+      const int32_t proposedMinutes =
+          editedStageStartTime_.hour * 60 + editedStageStartTime_.minute;
+      int32_t difference = proposedMinutes - nowMinutes;
+      if (difference > 720) difference -= 1440;
+      if (difference < -720) difference += 1440;
+      if (difference < 0 ||
+          (difference == 0 && nowClock.second >= editedStageStartTime_.second))
+        stageStartProposalExpired_ = true;
+    }
+    if (atOverlayVisible_ && !atDistanceArmed_) {
+      const uint64_t nowMs = clock_.elapsedSinceSetMilliseconds();
+      if (speedCalculator_.speedKmh() <= 3.6F) {
+        if (!atLowSpeedTiming_) {
+          atLowSpeedTiming_ = true;
+          atLowSpeedSinceMs_ = nowMs;
+        } else if (nowMs - atLowSpeedSinceMs_ >= 1000) {
+          atDistanceArmed_ = true;
+          atTravelledDistanceMm_ = 0;
+        }
+      } else {
+        atLowSpeedTiming_ = false;
+      }
+    }
   }
 }
 
@@ -547,6 +1020,63 @@ DisplayModel ApplicationCore::displayModel() const {
   model.timeEntry = {editedHour_, editedMinute_, activeTimeField_,
                      startupTimeEdit_};
   model.calibration = {editedMillimetersPerPulse_, calibrationSaveFailed_};
+  const domain::MittisProposal& mittis = competition_.mittisProposal();
+  model.mittis = {mittis.oldMillimetersPerPulse,
+                  mittis.proposedMillimetersPerPulse,
+                  mittis.measuredDistanceMillimeters,
+                  mittis.referenceDistanceMeters,
+                  mittis.valid,
+                  calibrationSaveFailed_};
+  model.atOverlay = {atOverlayVisible_, atClockTime_, !atDistanceArmed_,
+                     atTravelledDistanceMm_,
+                     competitionSettings_.atDisplayDistanceM};
+  model.jatResult = {competition_.arrivalClockTime(),
+                     competition_.finalDeltaMs() / 1000};
+  model.finishResult.visible =
+      competition_.state() == domain::CompetitionState::FINISHED &&
+      !competition_.stageResults().empty();
+  model.finishResult.totalPoints = competition_.totalPoints();
+  if (model.finishResult.visible)
+    model.finishResult.finishClockTime =
+        competition_.stageResults().back().endClockTime;
+  const uint64_t elapsed =
+      clock_.isSet() ? clock_.elapsedSinceSetMilliseconds() : 0;
+  model.startTimeEdit = {
+      editedStageStartTime_, competition_.pendingJatType(),
+      !stageStartProposalExpired_ || ((elapsed / 500ULL) % 2ULL == 0),
+      !startTimeCorrection_ &&
+          competition_.pendingJatType() == domain::JatType::EMIT_JAT_OFFSET};
+  model.overrideMenu = {overrideMenuAction_};
+  model.overrideEdit = {overrideMenuAction_, overrideEditPhase_,
+                        overrideStartSegmentIndex_, overrideEndPointIndex_,
+                        overrideMaximumEndPointIndex_,
+                        overrideDurationSeconds_, overrideInvalid_};
+  model.resultView.type = resultViewType_;
+  model.resultView.selectedIndex = resultSelectedIndex_;
+  model.resultView.itemCount = 0;
+  model.resultView.totalPoints = competition_.totalPoints();
+  if (resultViewType_ == ResultViewType::StageResults) {
+    const std::vector<domain::StageResult>& results =
+        competition_.stageResults();
+    model.resultView.itemCount = static_cast<uint16_t>(
+        results.size() > 0xFFFFU ? 0xFFFFU : results.size());
+    if (resultSelectedIndex_ < results.size()) {
+      model.resultView.hasStageResult = true;
+      model.resultView.stageResult = results[resultSelectedIndex_];
+    }
+  } else if (resultViewType_ == ResultViewType::TotalPoints) {
+    model.resultView.itemCount = 1;
+  } else {
+    model.resultView.itemCount = static_cast<uint16_t>(
+        eventRepository_.count() > 0xFFFFU ? 0xFFFFU
+                                           : eventRepository_.count());
+    const domain::EventRecord* event =
+        eventRepository_.at(resultSelectedIndex_);
+    if (event) {
+      model.resultView.hasEvent = true;
+      model.resultView.event = *event;
+    }
+  }
   model.order.editor = routeOrderEditor_.view();
   model.orderAccess.selectedAction = orderAccessAction_;
   model.order.hasSelectedSegment = false;
@@ -556,10 +1086,6 @@ DisplayModel ApplicationCore::displayModel() const {
   model.competition.deltaFrozen = competition_.deltaFrozen();
   model.competition.undoPromptVisible = competition_.hasUndoPrompt(
       clock_.isSet() ? clock_.elapsedSinceSetMilliseconds() : 0);
-  model.competition.jatNotImplemented = competition_.jatNotImplemented();
-  model.competition.pointLongPressNotImplemented =
-      pointLongPressNotImplemented_;
-  model.competition.atNotImplemented = atNotImplemented_;
   const domain::SegmentDefinition* current = competition_.currentSegment();
   if (current) {
     model.competition.currentSegment = *current;
@@ -651,6 +1177,27 @@ void ApplicationCore::completeCalibrationSave(bool succeeded) {
     return;
   }
   calibrationSaveInFlight_ = false;
+  if (mittisCalibrationSave_) {
+    mittisCalibrationSave_ = false;
+    if (succeeded) {
+      millimetersPerPulse_ = editedMillimetersPerPulse_;
+      speedCalculator_.setMillimetersPerPulse(millimetersPerPulse_);
+      domain::EventRecord accepted =
+          makeEvent(domain::DomainEventType::MITTIS_ACCEPTED);
+      accepted.payload.oldCalibration =
+          competition_.mittisProposal().oldMillimetersPerPulse;
+      accepted.payload.proposedCalibration = millimetersPerPulse_;
+      appendEvent(accepted);
+      const uint16_t endedSegment = competition_.currentSegmentIndex();
+      const domain::PointResult result = competition_.resolveMittisProposal();
+      calibrationSaveFailed_ = false;
+      completeMittisPoint(result, endedSegment);
+    } else {
+      editedMillimetersPerPulse_ = millimetersPerPulse_;
+      calibrationSaveFailed_ = true;
+    }
+    return;
+  }
   if (succeeded) {
     millimetersPerPulse_ = editedMillimetersPerPulse_;
     speedCalculator_.setMillimetersPerPulse(millimetersPerPulse_);
@@ -664,6 +1211,11 @@ void ApplicationCore::completeCalibrationSave(bool succeeded) {
 void ApplicationCore::setInitialTextColor(domain::TextColor color) {
   textColor_ = domain::isValidTextColor(color) ? color : domain::TextColor::WHITE;
   editedTextColor_ = textColor_;
+}
+
+void ApplicationCore::setCompetitionSettings(
+    const domain::CompetitionSettings& settings) {
+  competitionSettings_ = domain::validatedCompetitionSettings(settings);
 }
 
 bool ApplicationCore::takeTextColorSaveRequest(domain::TextColor& color) {
@@ -724,8 +1276,69 @@ void ApplicationCore::activateCurrentRouteOrder() {
       1000UL;
   if (competition_.activate(currentRouteOrder_, millisecondsOfDay,
                             clock_.elapsedSinceSetMilliseconds())) {
+    domain::EventRecord accepted =
+        makeEvent(domain::DomainEventType::START_TIME_ACCEPTED);
+    accepted.payload.acceptedStartClockTime =
+        {currentRouteOrder_.startHour, currentRouteOrder_.startMinute, 0};
+    appendEvent(accepted);
     loadedRouteOrderActive_ = false;
   }
+}
+
+domain::EventRecord ApplicationCore::makeEvent(
+    domain::DomainEventType type) const {
+  domain::EventRecord record;
+  record.eventType = type;
+  record.clockTime = eventClock(clock_.isSet() ? clock_.now() : ClockTime{0, 0, 0});
+  record.monotonicTimeMs =
+      clock_.isSet() ? clock_.elapsedSinceSetMilliseconds() : 0;
+  record.segmentIndex = competition_.currentSegmentIndex();
+  record.competitionTimeMs = competition_.realTimeMs();
+  record.tIdealMs = competition_.idealTimeMs();
+  record.deltaMs = competition_.deltaMs();
+  record.physicalDistanceMillimeters =
+      competition_.physicalDistanceMillimeters();
+  record.stageDistanceMillimeters = competition_.stageDistanceMillimeters();
+  record.segmentDistanceMillimeters =
+      competition_.segmentDistanceMillimeters();
+  record.trip1DistanceMillimeters = trip1DistanceMm_;
+  record.trip2DistanceMillimeters = trip2DistanceMm_;
+  const float speedMilli = speedCalculator_.speedKmh() * 1000.0F;
+  record.speedKmhMilli =
+      speedMilli >= static_cast<float>(std::numeric_limits<int32_t>::max())
+          ? std::numeric_limits<int32_t>::max()
+          : static_cast<int32_t>(speedMilli);
+  record.reverseActive = reverseActive_;
+  return record;
+}
+
+uint64_t ApplicationCore::appendEvent(domain::EventRecord record) {
+  uint64_t eventId = 0;
+  return eventRepository_.append(record, eventId) ? eventId : 0;
+}
+
+void ApplicationCore::handleAtRelease() {
+  const uint64_t nowMs =
+      clock_.isSet() ? clock_.elapsedSinceSetMilliseconds() : 0;
+  if (atEventCancellable_ && nowMs - atEventMonotonicMs_ <= 3000) {
+    eventRepository_.markCancelled(atEventId_);
+    domain::EventRecord cancellation =
+        makeEvent(domain::DomainEventType::AT_CANCELLED);
+    cancellation.payload.referencedEventId = atEventId_;
+    appendEvent(cancellation);
+    atEventCancellable_ = false;
+    atOverlayVisible_ = false;
+    return;
+  }
+  domain::EventRecord record = makeEvent(domain::DomainEventType::AT);
+  atEventId_ = appendEvent(record);
+  atEventCancellable_ = atEventId_ != 0;
+  atEventMonotonicMs_ = nowMs;
+  atClockTime_ = record.clockTime;
+  atOverlayVisible_ = true;
+  atLowSpeedTiming_ = false;
+  atDistanceArmed_ = false;
+  atTravelledDistanceMm_ = 0;
 }
 
 bool ApplicationCore::takeRouteOrderCompletionRequest() {

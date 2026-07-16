@@ -104,6 +104,8 @@ void setup() {
   const settings::TextColorLoadResult textColor =
       settingsRepository.loadTextColor();
   application.setInitialTextColor(textColor.color);
+  application.setCompetitionSettings(
+      settingsRepository.loadCompetitionSettings().settings);
   Serial.printf("Calibration: %lu mm/pulse%s\n",
                 static_cast<unsigned long>(calibration.millimetersPerPulse),
                 calibration.usedDefault ? " (default)" : " (NVS)");

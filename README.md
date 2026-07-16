@@ -4,18 +4,21 @@ This branch contains a hardware-independent ASkompu application shell and a
 320x170 LilyGO T-Display S3 adapter. The normative product and interaction
 specification is the [ASkompu GitHub Wiki](https://github.com/Mikky100/ASkompu/wiki).
 
-## First competition-calculation phase
+## Competition runtime
 
-TIME and SPEED calculation, start waiting, normal points, immediate point
-undo, and finish run in RAM. The stored route order has separate active and
-completed metadata so a completed order is not started again. Rapidly changing
-competition state is not written to NVS.
+TIME, SPEED and MITTIS calculation, start waiting, normal points, immediate
+point undo, JAT stages, finish, scoring, AT, additional orders and road breaks
+run in RAM. JAT supports `MANNED_JAT`, `EMIT_JAT_OFFSET`, `EMIT_MLA` and
+`EMIT_ULA`, including their start-time proposals and physical stage-distance
+zero points. MITTIS calibration proposals use integer arithmetic and a changed
+factor affects only future pulses.
 
-An in-progress runtime state and the finish result are not yet restored after
-power loss. A JAT point leaves calculation state unchanged and exposes a
-controlled not-implemented notification. `JAT_RESULT`, start proposals,
-MLA/ULA flows, scoring, and the persistent `EventRecord` log remain for the
-next phase.
+Events are written in order to a hardware-independent RAM repository. The log
+contains point/undo, AT/cancel, JAT, finish, start-time, MITTIS, override,
+reverse and trip-reset records. JAT and finish records carry their `StageResult`;
+totals use saturating arithmetic. Runtime events and in-progress competition
+state are intentionally not restored after power loss yet, and rapidly
+changing state is not written to NVS.
 
 ## Startup and software clock
 
@@ -64,7 +67,7 @@ workflow; unavailable unrelated items remain visible but dimmed.
 | Ajomääräys | Unified creation, browsing, editing, and confirmed replacement | Implemented |
 | Kello | Direct clock editing | Implemented |
 | Kerroin | Direct mm/pulse calibration editing | Implemented |
-| Pisteet ja tapahtumat | Jaksojen pisteet, Kokonaispisteet, Tapahtumat | Unavailable: scoring and event repository do not exist yet |
+| Pisteet ja tapahtumat | Jaksojen pisteet, Kokonaispisteet, Tapahtumat | Implemented from the current RAM event/result data |
 | Näyttöasetukset | Näyttöprofiili, Näyttöselitteet, Aikaeron muoto, Trip-tarkkuus, Tekstin väri | Persistent white/red/green text color works; other rows remain unavailable |
 | Tripit | Nollaa Trip 1, Nollaa Trip 2, Ulkoinen trip | Both resets work; external display source needs its hardware/protocol adapter |
 | Järjestelmä | Diagnostiikka, Painikeasetukset, Muut asetukset | Diagnostics works; persistent button/system settings are not implemented |
@@ -136,8 +139,8 @@ import adapter.
   TFT, Preferences, or display-resolution dependency.
 - `src/core/Clock.*` defines `TimeSource`/`Clock` and the hardware-independent
   rollover-safe software clock.
-- `src/domain/` contains calculation, saturation, trip, speed, and calibration
-  primitives.
+- `src/domain/` contains calculation, saturation, trip, speed and calibration
+  primitives plus scoring, event/result models and the RAM event repository.
 - `src/input/` adapts active-low buttons, the reverse level, and
   interrupt-driven pulses. `ButtonInterpreter` and the 20 ms continuous-level
   `StableSignalFilter` are native-testable.
@@ -175,9 +178,11 @@ display, NVS, or board. They cover clock validation/entry/acceptance, restart,
 minute/hour/day transitions, multi-day running and rollover; basic DisplayModel
 contents; menu opening, wrapping, clamping, scrolling, disabled items and
 return paths; clock editing; calibration cancel/accept/failure/write requests;
-diagnostics; independent trip resets; Point/AT timing; signed forward/reverse
-distance; reverse-level filtering; pulses in every relevant UI state; motion
-math, saturation, debounce, speed timeout, and the generator cycle.
+diagnostics; independent trip resets; Point/AT timing and cancellation;
+signed forward/reverse distance; MITTIS calibration; every JAT type and start
+proposal; scoring; runtime overrides; result/event browsing; reverse-level
+filtering; pulses in every relevant UI state; motion math, saturation, debounce,
+speed timeout, and the generator cycle.
 
 ## Pulse generator test cycle
 
@@ -204,6 +209,11 @@ only future pulses. The existing Preferences namespace and keys remain
 `askompu`, `schemaVersion`, and `mmPerPulseFixed`. Missing, incompatible, or
 out-of-range storage falls back safely to `1000 mm/pulse`.
 
+The same settings repository validates `lateFactor` (default 1), `earlyFactor`
+(default 3), `jatResultSeconds` (0...20, default 5) and
+`atDisplayDistanceM` (1...20, default 10). Writes compare stored values and
+only update changed accepted fields.
+
 ## Confirmed LilyGO wiring and missing hardware
 
 | Function | GPIO |
@@ -222,9 +232,10 @@ All buttons use active LOW with internal pull-ups. Reverse is a continuous
 active-LOW input with a 20 ms stability filter; its stable value is sampled
 before each pulse batch. Point long-press starts at 1200 ms without repeat, and
 its release cannot also create a short point. Trip 1 reset and foot reset are
-not physically connected in this profile. RTC hardware, external trip display,
-AT domain behavior, additional-order/TK behavior, scoring, and persistent event
-storage remain unavailable.
+not physically connected in this profile. RTC hardware, external trip display
+and persistent crash-safe runtime/event storage remain unavailable. Trip 1 is
+reset automatically at every JAT and again at the accepted MLA/ULA physical
+start point. Trip 2 is never reset by JAT automation.
 
 ## Physical verification checklist
 
@@ -255,9 +266,18 @@ storage remain unavailable.
 13. During a pulse run, pull GPIO13 LOW and verify trip and competition distance
     decrease while displayed speed remains positive; release it and verify
     distance increases without losing a pulse batch.
-14. Verify a short GPIO14 press advances one point on release, a press longer
-    than 1200 ms only shows the controlled not-implemented TK message, and the
-    finish point freezes the result.
+14. Verify a short GPIO14 press advances one point on release and a press longer
+    than 1200 ms opens `LISAMAARAYS` / `TIEKATKO` without creating a point.
+15. Drive a MITTIS interval, verify the old/new factor prompt, reject once,
+    accept once, power-cycle, and confirm only the accepted factor persists.
+16. Verify AT shows the press time, a second AT within three seconds cancels it,
+    and the overlay disappears only after one second at at most 3.6 km/h plus
+    the configured absolute travel distance in either direction.
+17. Exercise every JAT type, including result timeout/Right skip, minute editing,
+    EMIT offset acceptance with Point, MLA/ULA distance exclusion and a start
+    time crossing midnight.
+18. Open stage points, total points and event history; verify cancelled events
+    are marked and finish keeps the current frozen clock/delta presentation.
 
 Firmware upload and serial-port testing are intentionally outside the automated
 workflow.

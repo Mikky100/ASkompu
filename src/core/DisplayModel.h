@@ -5,6 +5,7 @@
 #include "Clock.h"
 #include "domain/DisplaySetting.h"
 #include "domain/CompetitionEngine.h"
+#include "domain/CompetitionRecords.h"
 #include "route/RouteOrderEditor.h"
 
 namespace core {
@@ -15,6 +16,12 @@ enum class Screen : uint8_t {
   Menu,
   TimeEdit,
   CalibrationEdit,
+  MittisProposal,
+  JatResult,
+  StartTimeEdit,
+  OverrideMenu,
+  OverrideEdit,
+  ResultView,
   OrderAccessPrompt,
   OrderEdit,
   Diagnostics,
@@ -39,6 +46,71 @@ struct CalibrationDisplayModel {
   bool saveFailed;
 };
 
+struct MittisDisplayModel {
+  uint32_t oldMillimetersPerPulse;
+  uint32_t proposedMillimetersPerPulse;
+  int64_t measuredDistanceMillimeters;
+  uint32_t referenceDistanceMeters;
+  bool valid;
+  bool saveFailed;
+};
+
+struct AtOverlayDisplayModel {
+  bool visible;
+  domain::EventClockTime clockTime;
+  bool waitingForStop;
+  int64_t travelledDistanceMillimeters;
+  uint8_t targetDistanceMeters;
+};
+
+struct JatResultDisplayModel {
+  domain::EventClockTime arrivalClockTime;
+  int64_t finalDeltaSeconds;
+};
+
+struct FinishResultDisplayModel {
+  bool visible;
+  domain::EventClockTime finishClockTime;
+  uint64_t totalPoints;
+};
+
+struct StartTimeEditDisplayModel {
+  domain::EventClockTime proposedClockTime;
+  domain::JatType jatType;
+  bool valueVisible;
+  bool acceptsWithPoint;
+};
+
+enum class OverrideMenuAction : uint8_t { AdditionalOrder, RoadBreak };
+enum class OverrideEditPhase : uint8_t { StartSegment, Duration, EndPoint };
+
+struct OverrideMenuDisplayModel {
+  OverrideMenuAction selectedAction;
+};
+
+struct OverrideEditDisplayModel {
+  OverrideMenuAction action;
+  OverrideEditPhase phase;
+  uint16_t startSegmentIndex;
+  uint16_t endPointIndex;
+  uint16_t maximumEndPointIndex;
+  uint16_t durationSeconds;
+  bool invalid;
+};
+
+enum class ResultViewType : uint8_t { StageResults, TotalPoints, Events };
+
+struct ResultViewDisplayModel {
+  ResultViewType type;
+  uint16_t selectedIndex;
+  uint16_t itemCount;
+  bool hasStageResult;
+  domain::StageResult stageResult;
+  uint64_t totalPoints;
+  bool hasEvent;
+  domain::EventRecord event;
+};
+
 struct OrderDisplayModel {
   route::RouteOrderEditorView editor;
   domain::SegmentDefinition selectedSegment;
@@ -61,9 +133,6 @@ struct CompetitionDisplayModel {
   domain::SegmentDefinition nextSegment;
   bool hasNextSegment;
   bool undoPromptVisible;
-  bool jatNotImplemented;
-  bool pointLongPressNotImplemented;
-  bool atNotImplemented;
 };
 
 constexpr uint8_t MENU_VISIBLE_ROWS = 5;
@@ -114,6 +183,14 @@ struct DisplayModel {
   TripDisplayModel trip2;
   TimeEntryDisplayModel timeEntry;
   CalibrationDisplayModel calibration;
+  MittisDisplayModel mittis;
+  AtOverlayDisplayModel atOverlay;
+  JatResultDisplayModel jatResult;
+  FinishResultDisplayModel finishResult;
+  StartTimeEditDisplayModel startTimeEdit;
+  OverrideMenuDisplayModel overrideMenu;
+  OverrideEditDisplayModel overrideEdit;
+  ResultViewDisplayModel resultView;
   OrderDisplayModel order;
   OrderAccessDisplayModel orderAccess;
   CompetitionDisplayModel competition;

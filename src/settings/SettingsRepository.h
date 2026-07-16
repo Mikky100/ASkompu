@@ -3,6 +3,7 @@
 #include <cstdint>
 
 #include "domain/DisplaySetting.h"
+#include "domain/CompetitionRecords.h"
 
 namespace settings {
 
@@ -16,12 +17,20 @@ struct TextColorLoadResult {
   bool usedDefault;
 };
 
+struct CompetitionSettingsLoadResult {
+  domain::CompetitionSettings settings;
+  bool usedDefault;
+};
+
 class SettingsRepository {
  public:
   CalibrationLoadResult loadCalibration() const;
   bool saveCalibration(uint32_t millimetersPerPulse) const;
   TextColorLoadResult loadTextColor() const;
   bool saveTextColor(domain::TextColor color) const;
+  CompetitionSettingsLoadResult loadCompetitionSettings() const;
+  bool saveCompetitionSettings(
+      const domain::CompetitionSettings& settings) const;
 };
 
 }  // namespace settings

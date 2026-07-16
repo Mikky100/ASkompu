@@ -9,6 +9,7 @@
 #include "domain/CompetitionEngine.h"
 #include "domain/RouteOrder.h"
 #include "domain/DisplaySetting.h"
+#include "domain/EventRepository.h"
 #include "route/RouteOrderEditor.h"
 
 namespace core {
@@ -44,6 +45,7 @@ class ApplicationCore {
   bool takeRouteOrderCompletionRequest();
   void completeRouteOrderCompletion(bool succeeded);
   void setInitialTextColor(domain::TextColor color);
+  void setCompetitionSettings(const domain::CompetitionSettings& settings);
   bool takeTextColorSaveRequest(domain::TextColor& color);
   void completeTextColorSave(bool succeeded);
   bool hasRouteOrder() const { return hasRouteOrder_; }
@@ -60,12 +62,27 @@ class ApplicationCore {
   uint8_t menuSelectedIndex() const { return menuSelectedIndex_; }
   uint8_t menuScrollOffset() const { return menuScrollOffset_; }
   const domain::CompetitionEngine& competition() const { return competition_; }
+  const domain::EventRepository& eventRepository() const {
+    return eventRepository_;
+  }
 
  private:
   void handleTimeEntry(const ButtonEvent& event);
   void handleBasicView(const ButtonEvent& event);
   void handleMenu(const ButtonEvent& event);
   void handleCalibration(const ButtonEvent& event);
+  void handleMittisProposal(const ButtonEvent& event);
+  void completeMittisPoint(domain::PointResult result,
+                           uint16_t endedSegment);
+  void handleJatResult(const ButtonEvent& event);
+  void handleStartTimeEdit(const ButtonEvent& event);
+  void beginJatStartTimeEdit();
+  void acceptJatStartTime();
+  void handleOverrideMenu(const ButtonEvent& event);
+  void handleOverrideEdit(const ButtonEvent& event);
+  void beginOverrideEdit();
+  void acceptOverride();
+  void handleResultView(const ButtonEvent& event);
   void handleOrderAccessPrompt(const ButtonEvent& event);
   void handleOrderEditor(const ButtonEvent& event);
   void openMainMenu(uint8_t selectedIndex);
@@ -75,6 +92,9 @@ class ApplicationCore {
   void resetTrip1();
   void resetTrip2();
   void addDistance(int64_t deltaMillimeters, uint32_t pulseCount);
+  domain::EventRecord makeEvent(domain::DomainEventType type) const;
+  uint64_t appendEvent(domain::EventRecord record);
+  void handleAtRelease();
   void activateCurrentRouteOrder();
   void updateMenuScroll();
   uint8_t menuItemCount() const;
@@ -83,6 +103,8 @@ class ApplicationCore {
   Clock& clock_;
   domain::SpeedCalculator speedCalculator_;
   domain::CompetitionEngine competition_;
+  domain::RamEventRepository eventRepository_;
+  domain::CompetitionSettings competitionSettings_;
   uint32_t zeroSpeedTimeoutUs_;
   uint32_t millimetersPerPulse_;
   uint32_t editedMillimetersPerPulse_;
@@ -99,6 +121,7 @@ class ApplicationCore {
   bool calibrationSaveFailed_ = false;
   bool calibrationSavePending_ = false;
   bool calibrationSaveInFlight_ = false;
+  bool mittisCalibrationSave_ = false;
   bool hasRouteOrder_ = false;
   bool routeOrderSavePending_ = false;
   bool routeOrderSaveInFlight_ = false;
@@ -123,8 +146,30 @@ class ApplicationCore {
   uint8_t lastPointEventType_ = 0xFF;
   uint8_t lastAtEventType_ = 0xFF;
   bool reverseActive_ = false;
-  bool pointLongPressNotImplemented_ = false;
-  bool atNotImplemented_ = false;
+  bool atOverlayVisible_ = false;
+  uint64_t lastPointEventId_ = 0;
+  uint64_t atEventId_ = 0;
+  bool atEventCancellable_ = false;
+  uint64_t atEventMonotonicMs_ = 0;
+  domain::EventClockTime atClockTime_;
+  bool atLowSpeedTiming_ = false;
+  uint64_t atLowSpeedSinceMs_ = 0;
+  bool atDistanceArmed_ = false;
+  int64_t atTravelledDistanceMm_ = 0;
+  domain::EventClockTime editedStageStartTime_;
+  domain::EventClockTime originalStageStartProposal_;
+  int8_t emitOffsetAdjustmentMinutes_ = 0;
+  bool stageStartProposalExpired_ = false;
+  bool startTimeCorrection_ = false;
+  OverrideMenuAction overrideMenuAction_ = OverrideMenuAction::AdditionalOrder;
+  OverrideEditPhase overrideEditPhase_ = OverrideEditPhase::StartSegment;
+  uint16_t overrideStartSegmentIndex_ = 0;
+  uint16_t overrideEndPointIndex_ = 0;
+  uint16_t overrideMaximumEndPointIndex_ = 0;
+  uint16_t overrideDurationSeconds_ = 60;
+  bool overrideInvalid_ = false;
+  ResultViewType resultViewType_ = ResultViewType::StageResults;
+  uint16_t resultSelectedIndex_ = 0;
   uint32_t previousPulseAtUs_ = 0;
   uint32_t lastPulseAtUs_ = 0;
   uint32_t lastTickAtUs_ = 0;
