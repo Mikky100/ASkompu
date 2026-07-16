@@ -6,6 +6,7 @@
 #include "core/ApplicationCore.h"
 #include "input/DebouncedButton.h"
 #include "input/PulseInput.h"
+#include "input/StableSignalFilter.h"
 #include "ports/ArduinoClock.h"
 #include "settings/SettingsRepository.h"
 #include "settings/PreferencesRouteOrderStore.h"
@@ -15,6 +16,8 @@ namespace {
 
 constexpr uint32_t DEBOUNCE_MS = 35;
 constexpr uint32_t POLL_INTERVAL_MS = 10;
+constexpr uint32_t POINT_LONG_PRESS_MS = 1200;
+constexpr uint32_t REVERSE_STABILITY_MS = 20;
 
 input::DebouncedButton leftButton(BoardConfig::PIN_BUTTON_LEFT,
                                   BoardConfig::BUTTON_PRESSED_LEVEL,
@@ -34,9 +37,16 @@ input::DebouncedButton rightButton(BoardConfig::PIN_BUTTON_RIGHT,
                                    DEBOUNCE_MS,
                                    CalibrationConfig::LONG_PRESS_DELAY_MS,
                                    0);
-input::DebouncedButton tripResetButton(BoardConfig::PIN_BUTTON_TRIP_RESET,
-                                       BoardConfig::BUTTON_PRESSED_LEVEL,
-                                       DEBOUNCE_MS);
+input::DebouncedButton pointButton(BoardConfig::PIN_BUTTON_POINT,
+                                   BoardConfig::BUTTON_PRESSED_LEVEL,
+                                   DEBOUNCE_MS, POINT_LONG_PRESS_MS, 0);
+input::DebouncedButton atButton(BoardConfig::PIN_BUTTON_AT,
+                                BoardConfig::BUTTON_PRESSED_LEVEL,
+                                DEBOUNCE_MS);
+input::DebouncedButton trip2ResetButton(BoardConfig::PIN_BUTTON_TRIP2_RESET,
+                                        BoardConfig::BUTTON_PRESSED_LEVEL,
+                                        DEBOUNCE_MS);
+input::StableSignalFilter reverseFilter(REVERSE_STABILITY_MS);
 input::PulseInput pulseInput(BoardConfig::PIN_PULSE_INPUT,
                              BoardConfig::PULSE_INPUT_MODE,
                              BoardConfig::PULSE_INTERRUPT_MODE);
@@ -68,6 +78,21 @@ void dispatchButton(input::DebouncedButton& button, core::ButtonId id,
   }
 }
 
+void dispatchPointButton(uint32_t nowMs) {
+  if (pointButton.consumePressedEvent())
+    application.handleButton(
+        {core::ButtonId::Point, core::ButtonEventType::Press, nowMs});
+  if (pointButton.consumeLongPressEvent())
+    application.handleButton(
+        {core::ButtonId::Point, core::ButtonEventType::LongStart, nowMs});
+  if (pointButton.consumeReleasedEvent()) {
+    const bool shortPress = pointButton.consumeShortPressEvent();
+    if (shortPress)
+      application.handleButton(
+          {core::ButtonId::Point, core::ButtonEventType::Release, nowMs});
+  }
+}
+
 }  // namespace
 
 void setup() {
@@ -84,7 +109,9 @@ void setup() {
                 calibration.usedDefault ? " (default)" : " (NVS)");
   domain::RouteOrder routeOrder;
   if (routeOrderStore.load(routeOrder)) {
-    application.setInitialRouteOrder(routeOrder);
+    application.setInitialRouteOrder(
+        routeOrder,
+        routeOrderStore.activity() == route::RouteOrderActivity::ACTIVE);
     Serial.printf("Route order: %u segments (NVS)\n",
                   static_cast<unsigned>(routeOrder.segments.size()));
   }
@@ -93,14 +120,17 @@ void setup() {
   upButton.begin();
   downButton.begin();
   rightButton.begin();
-  tripResetButton.begin();
+  pointButton.begin();
+  atButton.begin();
+  trip2ResetButton.begin();
+  pinMode(BoardConfig::PIN_REVERSE_INPUT, BoardConfig::REVERSE_INPUT_MODE);
+  const uint32_t inputNowMs = clockSource.monotonicMilliseconds();
+  reverseFilter.reset(
+      digitalRead(BoardConfig::PIN_REVERSE_INPUT) ==
+          BoardConfig::REVERSE_ACTIVE_LEVEL,
+      inputNowMs);
+  application.handleReverseSignal({reverseFilter.active(), inputNowMs});
   pulseInput.begin();
-
-  if (tripResetButton.isPressed()) {
-    application.handleButton(
-        {core::ButtonId::Trip1Reset, core::ButtonEventType::Press,
-         clockSource.monotonicMilliseconds()});
-  }
 
   view.begin();
   view.render(application.displayModel());
@@ -113,7 +143,15 @@ void loop() {
   upButton.update(nowMs);
   downButton.update(nowMs);
   rightButton.update(nowMs);
-  tripResetButton.update(nowMs);
+  pointButton.update(nowMs);
+  atButton.update(nowMs);
+  trip2ResetButton.update(nowMs);
+
+  const bool rawReverse =
+      digitalRead(BoardConfig::PIN_REVERSE_INPUT) ==
+      BoardConfig::REVERSE_ACTIVE_LEVEL;
+  if (reverseFilter.update(rawReverse, nowMs))
+    application.handleReverseSignal({reverseFilter.active(), nowMs});
 
   const input::PulseSnapshot pulseSnapshot = pulseInput.consumeSnapshot();
   const uint32_t nowUs = clockSource.monotonicMicroseconds();
@@ -122,7 +160,9 @@ void loop() {
   dispatchButton(upButton, core::ButtonId::Up, nowMs);
   dispatchButton(downButton, core::ButtonId::Down, nowMs);
   dispatchButton(rightButton, core::ButtonId::Right, nowMs);
-  dispatchButton(tripResetButton, core::ButtonId::Trip1Reset, nowMs);
+  dispatchPointButton(nowMs);
+  dispatchButton(atButton, core::ButtonId::At, nowMs);
+  dispatchButton(trip2ResetButton, core::ButtonId::Trip2Reset, nowMs);
 
   if (pulseSnapshot.pendingPulses > 0) {
     Serial.printf("GPIO16 pulses: %lu, total: %lu\n",
@@ -132,7 +172,7 @@ void loop() {
 
   application.handleDistancePulses(
       {pulseSnapshot.pendingPulses, pulseSnapshot.previousPulseAtUs,
-       pulseSnapshot.lastPulseAtUs, nowUs});
+       pulseSnapshot.lastPulseAtUs, nowUs, reverseFilter.active()});
   application.tick(nowUs);
 
   uint32_t calibrationToSave = 0;
@@ -156,6 +196,9 @@ void loop() {
     const bool saved = orderToSave && routeOrderStore.replace(*orderToSave);
     application.completeRouteOrderSave(saved);
     Serial.printf("Route order save: %s\n", saved ? "ok" : "failed");
+  }
+  if (application.takeRouteOrderCompletionRequest()) {
+    application.completeRouteOrderCompletion(routeOrderStore.markCompleted());
   }
 
   const core::DisplayModel displayModel = application.displayModel();

@@ -17,6 +17,7 @@ void DebouncedButton::begin() {
   stablePressed_ = interpreter_.isPressed();
   pressedEventPending_ = false;
   releasedEventPending_ = false;
+  shortPressEventPending_ = false;
   longPressEventPending_ = false;
   repeatEventPending_ = false;
 }
@@ -27,8 +28,15 @@ void DebouncedButton::update(uint32_t nowMs) {
   stablePressed_ = interpreter_.isPressed();
   pressedEventPending_ = pressedEventPending_ || transitions.pressed;
   releasedEventPending_ = releasedEventPending_ || transitions.released;
+  shortPressEventPending_ = shortPressEventPending_ || transitions.shortPress;
   longPressEventPending_ = longPressEventPending_ || transitions.longStart;
   repeatEventPending_ = repeatEventPending_ || transitions.longRepeat;
+}
+
+bool DebouncedButton::consumeShortPressEvent() {
+  const bool event = shortPressEventPending_;
+  shortPressEventPending_ = false;
+  return event;
 }
 
 bool DebouncedButton::consumeReleasedEvent() {

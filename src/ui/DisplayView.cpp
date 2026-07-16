@@ -8,15 +8,44 @@
 namespace ui {
 namespace {
 
-void formatTrip(char* text, size_t size, uint64_t distanceMm) {
-  const uint64_t meters = distanceMm / 1000ULL;
+void formatTrip(char* text, size_t size, int64_t distanceMm) {
+  const bool negative = distanceMm < 0;
+  const uint64_t magnitude = negative
+                                 ? static_cast<uint64_t>(-(distanceMm + 1)) + 1
+                                 : static_cast<uint64_t>(distanceMm);
+  const uint64_t meters = magnitude / 1000ULL;
   if (meters < 10000ULL) {
-    std::snprintf(text, size, "%" PRIu64 ".%03" PRIu64,
+    std::snprintf(text, size, "%s%" PRIu64 ".%03" PRIu64,
+                  negative ? "-" : "",
                   meters / 1000ULL, meters % 1000ULL);
   } else {
     const uint64_t tenMeters = meters / 10ULL;
-    std::snprintf(text, size, "%" PRIu64 ".%02" PRIu64,
+    std::snprintf(text, size, "%s%" PRIu64 ".%02" PRIu64,
+                  negative ? "-" : "",
                   tenMeters / 100ULL, tenMeters % 100ULL);
+  }
+}
+
+void formatDelta(char* text, size_t size, int64_t seconds) {
+  if (seconds > 0)
+    std::snprintf(text, size, "+%" PRId64, seconds);
+  else
+    std::snprintf(text, size, "%" PRId64, seconds);
+}
+
+void formatSegment(char* text, size_t size,
+                   const domain::SegmentDefinition& segment) {
+  if (segment.segmentType == domain::SegmentType::TIME) {
+    std::snprintf(text, size, "%u-%u %lu:%02lu", segment.startPointIndex,
+                  segment.endPointIndex,
+                  static_cast<unsigned long>(segment.value / 60),
+                  static_cast<unsigned long>(segment.value % 60));
+  } else if (segment.segmentType == domain::SegmentType::SPEED) {
+    std::snprintf(text, size, "%u-%u %lu", segment.startPointIndex,
+                  segment.endPointIndex,
+                  static_cast<unsigned long>(segment.value));
+  } else {
+    text[0] = '\0';
   }
 }
 
@@ -96,6 +125,9 @@ void DisplayView::render(const core::DisplayModel& model) {
     case core::Screen::CalibrationEdit:
       showCalibration(model.calibration);
       break;
+    case core::Screen::OrderAccessPrompt:
+      showOrderAccess(model.orderAccess);
+      break;
     case core::Screen::OrderEdit:
       showOrder(model.order);
       break;
@@ -106,16 +138,41 @@ void DisplayView::render(const core::DisplayModel& model) {
   canvas_.pushSprite(0, 0);
 }
 
+void DisplayView::showOrderAccess(const core::OrderAccessDisplayModel& model) {
+  const bool edit = model.selectedAction == core::OrderAccessAction::Edit;
+  canvas_.setTextDatum(TC_DATUM);
+  canvas_.setTextColor(TFT_CYAN, TFT_BLACK);
+  canvas_.drawString("AJOMAARAYS", BoardConfig::DISPLAY_WIDTH / 2, 10, 2);
+  canvas_.setTextDatum(MC_DATUM);
+  canvas_.setTextSize(2);
+  canvas_.setTextColor(textColor_, TFT_BLACK);
+  canvas_.drawString(edit ? "MUOKKAA AJOMAARAYS" : "KORVAA AJOMAARAYS",
+                     BoardConfig::DISPLAY_WIDTH / 2, 78, 2);
+  canvas_.setTextSize(1);
+  canvas_.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+  canvas_.drawString("YLOS/ALAS VAIHTAA   OIKEA HYVAKSYY",
+                     BoardConfig::DISPLAY_WIDTH / 2, 150, 1);
+}
+
 void DisplayView::showBasicView(const core::DisplayModel& model) {
   char clockText[12];
   char speedText[18];
   char trip1Text[24];
   char trip2Text[24];
+  char deltaText[24];
+  char currentSegment[24]{};
+  char nextSegment[24]{};
   std::snprintf(clockText, sizeof(clockText), "%02u:%02u:%02u",
                 model.clock.hour, model.clock.minute, model.clock.second);
   std::snprintf(speedText, sizeof(speedText), "%.0f km/h", model.speedKmh);
   formatTrip(trip1Text, sizeof(trip1Text), model.trip1.distanceMillimeters);
   formatTrip(trip2Text, sizeof(trip2Text), model.trip2.distanceMillimeters);
+  formatDelta(deltaText, sizeof(deltaText), model.competition.deltaSeconds);
+  if (model.competition.hasCurrentSegment)
+    formatSegment(currentSegment, sizeof(currentSegment),
+                  model.competition.currentSegment);
+  if (model.competition.hasNextSegment)
+    formatSegment(nextSegment, sizeof(nextSegment), model.competition.nextSegment);
 
   canvas_.setTextDatum(TL_DATUM);
   canvas_.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
@@ -124,21 +181,44 @@ void DisplayView::showBasicView(const core::DisplayModel& model) {
   canvas_.drawString(speedText, BoardConfig::DISPLAY_WIDTH - 8, 7, 2);
 
   canvas_.setTextDatum(TL_DATUM);
-  canvas_.setTextColor(TFT_CYAN, TFT_BLACK);
-  canvas_.drawString("TRIP 1", 8, 38, 2);
-  canvas_.setTextDatum(ML_DATUM);
+  canvas_.setTextColor(TFT_DARKGREY, TFT_BLACK);
+  canvas_.drawString("1", 8, 42, 2);
   canvas_.setTextColor(textColor_, TFT_BLACK);
   canvas_.setTextSize(2);
-  canvas_.drawString(trip1Text, 8, 83, 2);
+  canvas_.drawString(trip1Text, 20, 48, 2);
   canvas_.setTextSize(1);
-
-  canvas_.drawFastHLine(8, 120, BoardConfig::DISPLAY_WIDTH - 16, TFT_DARKGREY);
   canvas_.setTextDatum(BL_DATUM);
-  canvas_.setTextColor(TFT_CYAN, TFT_BLACK);
-  canvas_.drawString("TRIP 2", 8, 162, 2);
-  canvas_.setTextDatum(BR_DATUM);
+  canvas_.setTextColor(TFT_DARKGREY, TFT_BLACK);
+  canvas_.drawString("2", 8, 162, 2);
   canvas_.setTextColor(textColor_, TFT_BLACK);
-  canvas_.drawString(trip2Text, BoardConfig::DISPLAY_WIDTH - 8, 162, 2);
+  canvas_.drawString(trip2Text, 20, 162, 2);
+
+  if (model.competition.state != domain::CompetitionState::IDLE) {
+    canvas_.setTextDatum(MC_DATUM);
+    canvas_.setTextSize(2);
+    canvas_.setTextColor(model.competition.deltaFrozen ? TFT_YELLOW : textColor_,
+                         TFT_BLACK);
+    canvas_.drawString(deltaText, 170, 83, 2);
+    canvas_.setTextSize(1);
+    canvas_.setTextDatum(TR_DATUM);
+    canvas_.setTextColor(textColor_, TFT_BLACK);
+    canvas_.drawString(currentSegment, 312, 48, 4);
+    canvas_.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+    canvas_.drawString(nextSegment, 312, 82, 2);
+    canvas_.setTextDatum(BC_DATUM);
+    if (model.competition.undoPromptVisible)
+      canvas_.drawString("<- = PERU", 160, 168, 2);
+    else if (model.competition.pointLongPressNotImplemented)
+      canvas_.drawString("LISAMAARAYS/TK EI TOTEUTETTU", 160, 168, 1);
+    else if (model.competition.atNotImplemented)
+      canvas_.drawString("AT EI VIELA TOTEUTETTU", 160, 168, 1);
+    else if (model.competition.jatNotImplemented)
+      canvas_.drawString("JAT EI VIELA TOTEUTETTU", 160, 168, 2);
+    else if (model.competition.state == domain::CompetitionState::WAIT_START)
+      canvas_.drawString("ODOTA LAHTOA", 160, 168, 2);
+    else if (model.competition.state == domain::CompetitionState::FINISHED)
+      canvas_.drawString("MAALI", 160, 168, 2);
+  }
 }
 
 void DisplayView::showTimeEntry(const core::TimeEntryDisplayModel& model) {
@@ -362,10 +442,10 @@ void DisplayView::showDiagnostics(
   canvas_.setTextColor(TFT_CYAN, TFT_BLACK);
   canvas_.drawString("DIAGNOSTIIKKA", 4, 2, 2);
   canvas_.setTextColor(textColor_, TFT_BLACK);
-  std::snprintf(line, sizeof(line), "L:%u U:%u D:%u R:%u GPIO14:%u",
+  std::snprintf(line, sizeof(line), "L:%u U:%u D:%u R:%u P:%u",
                 model.buttonPressed[0], model.buttonPressed[1],
                 model.buttonPressed[2], model.buttonPressed[3],
-                model.buttonPressed[4]);
+                model.buttonPressed[5]);
   canvas_.drawString(line, 4, 20, 1);
   std::snprintf(line, sizeof(line), "LAST %u/%u  STATE %u",
                 model.lastButtonId, model.lastButtonEventType,
@@ -374,12 +454,14 @@ void DisplayView::showDiagnostics(
   std::snprintf(line, sizeof(line), "PULSSIT %" PRIu64 "  T1 %" PRIu64,
                 model.totalPulseCount, model.trip1PulseCount);
   canvas_.drawString(line, 4, 48, 1);
-  std::snprintf(line, sizeof(line), "T2 PULSSIT %" PRIu64,
-                model.trip2PulseCount);
+  std::snprintf(line, sizeof(line), "AT:%u T2:%u REV:%u P/A:%u/%u",
+                model.buttonPressed[6], model.buttonPressed[7],
+                model.reverseActive, model.lastPointEventType,
+                model.lastAtEventType);
   canvas_.drawString(line, 4, 62, 1);
-  std::snprintf(line, sizeof(line), "T1 %" PRIu64 " mm", model.trip1DistanceMillimeters);
+  std::snprintf(line, sizeof(line), "T1 %" PRId64 " mm", model.trip1DistanceMillimeters);
   canvas_.drawString(line, 4, 76, 1);
-  std::snprintf(line, sizeof(line), "T2 %" PRIu64 " mm", model.trip2DistanceMillimeters);
+  std::snprintf(line, sizeof(line), "T2 %" PRId64 " mm", model.trip2DistanceMillimeters);
   canvas_.drawString(line, 4, 90, 1);
   std::snprintf(line, sizeof(line), "K %lu  V %.1f km/h",
                 static_cast<unsigned long>(model.millimetersPerPulse),

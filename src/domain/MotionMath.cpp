@@ -16,6 +16,14 @@ uint64_t saturatingAdd(uint64_t current, uint64_t increment) {
   return increment > maximum - current ? maximum : current + increment;
 }
 
+int64_t saturatingAddSigned(int64_t current, int64_t delta) {
+  if (delta > 0 && current > std::numeric_limits<int64_t>::max() - delta)
+    return std::numeric_limits<int64_t>::max();
+  if (delta < 0 && current < std::numeric_limits<int64_t>::min() - delta)
+    return std::numeric_limits<int64_t>::min();
+  return current + delta;
+}
+
 float speedKmhFromPulseInterval(uint32_t millimetersPerPulse,
                                 uint32_t intervalUs) {
   if (intervalUs == 0) {

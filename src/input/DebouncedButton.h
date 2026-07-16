@@ -17,6 +17,7 @@ class DebouncedButton {
   bool isPressed() const { return stablePressed_; }
   bool consumePressedEvent();
   bool consumeReleasedEvent();
+  bool consumeShortPressEvent();
   bool consumeLongPressEvent();
   bool consumeRepeatEvent();
 
@@ -29,6 +30,7 @@ class DebouncedButton {
   bool stablePressed_ = false;
   bool pressedEventPending_ = false;
   bool releasedEventPending_ = false;
+  bool shortPressEventPending_ = false;
   bool longPressEventPending_ = false;
   bool repeatEventPending_ = false;
 };

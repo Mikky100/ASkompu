@@ -91,6 +91,12 @@ uint8_t diagnosticButtonIndex(ButtonId id) {
     case ButtonId::Trip1Reset:
     case ButtonId::FootReset:
       return 4;
+    case ButtonId::Point:
+      return 5;
+    case ButtonId::At:
+      return 6;
+    case ButtonId::Trip2Reset:
+      return 7;
     default:
       return 0xFF;
   }
@@ -121,13 +127,17 @@ void ApplicationCore::handleButton(const ButtonEvent& event) {
   lastButtonId_ = static_cast<uint8_t>(event.buttonId);
   lastButtonEventType_ = static_cast<uint8_t>(event.eventType);
   const uint8_t diagnosticIndex = diagnosticButtonIndex(event.buttonId);
-  if (diagnosticIndex < 5) {
+  if (diagnosticIndex < 8) {
     if (event.eventType == ButtonEventType::Press) {
       buttonPressed_[diagnosticIndex] = true;
     } else if (event.eventType == ButtonEventType::Release) {
       buttonPressed_[diagnosticIndex] = false;
     }
   }
+  if (event.buttonId == ButtonId::Point)
+    lastPointEventType_ = static_cast<uint8_t>(event.eventType);
+  if (event.buttonId == ButtonId::At)
+    lastAtEventType_ = static_cast<uint8_t>(event.eventType);
 
   if (event.buttonId == ButtonId::Trip1Reset ||
       event.buttonId == ButtonId::FootReset) {
@@ -142,6 +152,34 @@ void ApplicationCore::handleButton(const ButtonEvent& event) {
   if (event.buttonId == ButtonId::Trip2Reset &&
       event.eventType == ButtonEventType::Press) {
     resetTrip2();
+    return;
+  }
+
+  if (event.buttonId == ButtonId::Point &&
+      event.eventType == ButtonEventType::Release &&
+      screen_ == Screen::BasicView) {
+    pointLongPressNotImplemented_ = false;
+    const domain::PointResult result =
+        competition_.pointReleased(clock_.elapsedSinceSetMilliseconds());
+    if (result == domain::PointResult::FINISHED) {
+      routeOrderCompletionPending_ = true;
+    }
+    return;
+  }
+  if (event.buttonId == ButtonId::Point &&
+      event.eventType == ButtonEventType::LongStart) {
+    pointLongPressNotImplemented_ = true;
+    return;
+  }
+  if (event.buttonId == ButtonId::At &&
+      event.eventType == ButtonEventType::Release) {
+    atNotImplemented_ = true;
+    return;
+  }
+  if (event.buttonId == ButtonId::Left &&
+      event.eventType == ButtonEventType::Press &&
+      screen_ == Screen::BasicView &&
+      competition_.undoPoint(clock_.elapsedSinceSetMilliseconds())) {
     return;
   }
 
@@ -174,6 +212,9 @@ void ApplicationCore::handleButton(const ButtonEvent& event) {
       break;
     case Screen::CalibrationEdit:
       handleCalibration(event);
+      break;
+    case Screen::OrderAccessPrompt:
+      handleOrderAccessPrompt(event);
       break;
     case Screen::OrderEdit:
       handleOrderEditor(event);
@@ -208,6 +249,7 @@ void ApplicationCore::handleTimeEntry(const ButtonEvent& event) {
     } else if (isValidClockTime(editedHour_, editedMinute_)) {
       clock_.set(editedHour_, editedMinute_, 0);
       if (startupTimeEdit_) {
+        activateCurrentRouteOrder();
         screen_ = Screen::BasicView;
       } else {
         openMainMenu(1);
@@ -326,6 +368,28 @@ void ApplicationCore::handleOrderEditor(const ButtonEvent& event) {
   }
 }
 
+void ApplicationCore::handleOrderAccessPrompt(const ButtonEvent& event) {
+  const bool step = event.eventType == ButtonEventType::Press ||
+                    event.eventType == ButtonEventType::LongRepeat;
+  if (step && (event.buttonId == ButtonId::Up ||
+               event.buttonId == ButtonId::Down)) {
+    orderAccessAction_ = orderAccessAction_ == OrderAccessAction::Edit
+                             ? OrderAccessAction::Replace
+                             : OrderAccessAction::Edit;
+    return;
+  }
+  if (event.eventType != ButtonEventType::Press) return;
+  if (event.buttonId == ButtonId::Left) {
+    openMainMenu(0);
+  } else if (event.buttonId == ButtonId::Right) {
+    if (orderAccessAction_ == OrderAccessAction::Edit)
+      routeOrderEditor_.beginBrowse(currentRouteOrder_);
+    else
+      routeOrderEditor_.beginCreate();
+    screen_ = Screen::OrderEdit;
+  }
+}
+
 void ApplicationCore::openMainMenu(uint8_t selectedIndex) {
   screen_ = Screen::Menu;
   menuPage_ = MenuPage::Main;
@@ -351,6 +415,13 @@ void ApplicationCore::activateMenuItem() {
   if (menuPage_ == MenuPage::Main) {
     mainMenuSelectedIndex_ = menuSelectedIndex_;
     if (menuSelectedIndex_ == 0) {
+      if (competition_.state() == domain::CompetitionState::WAIT_START ||
+          competition_.state() == domain::CompetitionState::RUNNING) {
+        orderAccessAction_ = OrderAccessAction::Edit;
+        screen_ = Screen::OrderAccessPrompt;
+        return;
+      }
+      if (competition_.state() != domain::CompetitionState::IDLE) return;
       if (hasRouteOrder_)
         routeOrderEditor_.beginBrowse(currentRouteOrder_);
       else
@@ -416,12 +487,22 @@ void ApplicationCore::resetTrip2() {
 }
 
 void ApplicationCore::handleDistancePulses(const DistancePulseEvent& event) {
-  const uint64_t distanceIncrement =
+  const uint64_t unsignedDistance =
       domain::motion::distanceMillimetersForPulses(event.pulseCount,
                                                    millimetersPerPulse_);
+  const int64_t magnitude =
+      unsignedDistance > static_cast<uint64_t>(std::numeric_limits<int64_t>::max())
+          ? std::numeric_limits<int64_t>::max()
+          : static_cast<int64_t>(unsignedDistance);
+  if (event.reverseActive != reverseActive_) {
+    handleReverseSignal({event.reverseActive,
+                         static_cast<uint32_t>(event.observedAtUs / 1000UL)});
+  }
+  const int64_t distanceDelta = event.reverseActive ? -magnitude : magnitude;
   totalPulseCount_ =
       domain::motion::saturatingAdd(totalPulseCount_, event.pulseCount);
-  addDistance(distanceIncrement, event.pulseCount);
+  addDistance(distanceDelta, event.pulseCount);
+  competition_.addDistanceMillimeters(distanceDelta);
   if (event.pulseCount > 0) {
     previousPulseAtUs_ = event.previousPulseAtUs;
     lastPulseAtUs_ = event.lastPulseAtUs;
@@ -435,6 +516,12 @@ void ApplicationCore::handleDistancePulses(const DistancePulseEvent& event) {
                           previousPulseAtUs_, lastPulseAtUs_);
 }
 
+void ApplicationCore::handleReverseSignal(const ReverseSignalEvent& event) {
+  (void)event.monotonicMs;
+  reverseActive_ = event.reverseActive;
+  competition_.setReverseActive(reverseActive_);
+}
+
 void ApplicationCore::tick(uint32_t nowUs) {
   lastTickAtUs_ = nowUs;
   const uint32_t speedPulseCount =
@@ -445,6 +532,7 @@ void ApplicationCore::tick(uint32_t nowUs) {
                           lastPulseAtUs_);
   if (clock_.isSet()) {
     clock_.now();
+    competition_.tick(clock_.elapsedSinceSetMilliseconds());
   }
 }
 
@@ -460,8 +548,28 @@ DisplayModel ApplicationCore::displayModel() const {
                      startupTimeEdit_};
   model.calibration = {editedMillimetersPerPulse_, calibrationSaveFailed_};
   model.order.editor = routeOrderEditor_.view();
+  model.orderAccess.selectedAction = orderAccessAction_;
   model.order.hasSelectedSegment = false;
   model.order.showsStartTime = false;
+  model.competition.state = competition_.state();
+  model.competition.deltaSeconds = competition_.deltaSeconds();
+  model.competition.deltaFrozen = competition_.deltaFrozen();
+  model.competition.undoPromptVisible = competition_.hasUndoPrompt(
+      clock_.isSet() ? clock_.elapsedSinceSetMilliseconds() : 0);
+  model.competition.jatNotImplemented = competition_.jatNotImplemented();
+  model.competition.pointLongPressNotImplemented =
+      pointLongPressNotImplemented_;
+  model.competition.atNotImplemented = atNotImplemented_;
+  const domain::SegmentDefinition* current = competition_.currentSegment();
+  if (current) {
+    model.competition.currentSegment = *current;
+    model.competition.hasCurrentSegment = true;
+  }
+  const domain::SegmentDefinition* next = competition_.nextSegment();
+  if (next) {
+    model.competition.nextSegment = *next;
+    model.competition.hasNextSegment = true;
+  }
   if (screen_ == Screen::OrderEdit &&
       model.order.editor.phase == route::EditorPhase::BROWSE) {
     if (model.order.editor.selectedSegment == 0) {
@@ -495,7 +603,7 @@ DisplayModel ApplicationCore::displayModel() const {
 
   if (screen_ == Screen::Diagnostics) {
     model.diagnostics.currentScreen = screen_;
-    for (uint8_t index = 0; index < 5; ++index) {
+    for (uint8_t index = 0; index < 8; ++index) {
       model.diagnostics.buttonPressed[index] = buttonPressed_[index];
     }
     model.diagnostics.lastButtonId = lastButtonId_;
@@ -520,6 +628,9 @@ DisplayModel ApplicationCore::displayModel() const {
     model.diagnostics.clock = model.clock;
     model.diagnostics.clockElapsedMilliseconds =
         clock_.elapsedSinceSetMilliseconds();
+    model.diagnostics.lastPointEventType = lastPointEventType_;
+    model.diagnostics.lastAtEventType = lastAtEventType_;
+    model.diagnostics.reverseActive = reverseActive_;
   }
   return model;
 }
@@ -572,11 +683,13 @@ void ApplicationCore::completeTextColorSave(bool succeeded) {
   updateMenuScroll();
 }
 
-void ApplicationCore::setInitialRouteOrder(const domain::RouteOrder& order) {
+void ApplicationCore::setInitialRouteOrder(const domain::RouteOrder& order,
+                                           bool active) {
   if (domain::validateRouteOrder(order) ==
       domain::RouteOrderValidationError::NONE) {
     currentRouteOrder_ = order;
     hasRouteOrder_ = true;
+    loadedRouteOrderActive_ = active;
   }
 }
 
@@ -595,20 +708,49 @@ void ApplicationCore::completeRouteOrderSave(bool succeeded) {
   if (succeeded) {
     currentRouteOrder_ = routeOrderEditor_.draft();
     hasRouteOrder_ = true;
+    loadedRouteOrderActive_ = true;
+    activateCurrentRouteOrder();
+    screen_ = Screen::BasicView;
   }
   routeOrderEditor_.completeSave(succeeded);
 }
 
-void ApplicationCore::addDistance(uint64_t incrementMillimeters,
+void ApplicationCore::activateCurrentRouteOrder() {
+  if (!hasRouteOrder_ || !loadedRouteOrderActive_ || !clock_.isSet()) return;
+  const ClockTime now = clock_.now();
+  const uint32_t millisecondsOfDay =
+      (static_cast<uint32_t>(now.hour) * 3600UL +
+       static_cast<uint32_t>(now.minute) * 60UL + now.second) *
+      1000UL;
+  if (competition_.activate(currentRouteOrder_, millisecondsOfDay,
+                            clock_.elapsedSinceSetMilliseconds())) {
+    loadedRouteOrderActive_ = false;
+  }
+}
+
+bool ApplicationCore::takeRouteOrderCompletionRequest() {
+  if (!routeOrderCompletionPending_ || routeOrderCompletionInFlight_) return false;
+  routeOrderCompletionPending_ = false;
+  routeOrderCompletionInFlight_ = true;
+  return true;
+}
+
+void ApplicationCore::completeRouteOrderCompletion(bool succeeded) {
+  if (!routeOrderCompletionInFlight_) return;
+  routeOrderCompletionInFlight_ = false;
+  if (!succeeded) routeOrderCompletionPending_ = true;
+}
+
+void ApplicationCore::addDistance(int64_t deltaMillimeters,
                                   uint32_t pulseCount) {
   if (!trip1ResetHeld_) {
-    trip1DistanceMm_ =
-        domain::motion::saturatingAdd(trip1DistanceMm_, incrementMillimeters);
+    trip1DistanceMm_ = domain::motion::saturatingAddSigned(
+        trip1DistanceMm_, deltaMillimeters);
     trip1PulseCount_ =
         domain::motion::saturatingAdd(trip1PulseCount_, pulseCount);
   }
-  trip2DistanceMm_ =
-      domain::motion::saturatingAdd(trip2DistanceMm_, incrementMillimeters);
+  trip2DistanceMm_ = domain::motion::saturatingAddSigned(
+      trip2DistanceMm_, deltaMillimeters);
   trip2PulseCount_ =
       domain::motion::saturatingAdd(trip2PulseCount_, pulseCount);
 }

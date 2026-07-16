@@ -18,6 +18,7 @@ class DisplayView {
   void showTimeEntry(const core::TimeEntryDisplayModel& model);
   void showMenu(const core::MenuDisplayModel& model);
   void showCalibration(const core::CalibrationDisplayModel& model);
+  void showOrderAccess(const core::OrderAccessDisplayModel& model);
   void showOrder(const core::OrderDisplayModel& model);
   void showDiagnostics(const core::DiagnosticsDisplayModel& model);
 

@@ -11,6 +11,8 @@ namespace {
 constexpr char NAMESPACE[] = "askompuOrder";
 constexpr char SLOT_KEYS[][4] = {"roA", "roB"};
 constexpr char GENERATION_KEYS[][5] = {"genA", "genB"};
+constexpr char ACTIVE_GENERATION_KEY[] = "activeGen";
+constexpr char COMPLETED_GENERATION_KEY[] = "doneGen";
 
 bool readSlot(Preferences& preferences, uint8_t slot, domain::RouteOrder& order,
               uint32_t& generation) {
@@ -85,8 +87,43 @@ bool PreferencesRouteOrderStore::replace(
       dataWritten && verifySlotPayload(preferences, target, bytes.size()) &&
       preferences.putUInt(GENERATION_KEYS[target], nextGeneration) ==
           sizeof(uint32_t);
+  const bool activityWritten =
+      generationWritten &&
+      preferences.putUInt(ACTIVE_GENERATION_KEY, nextGeneration) ==
+          sizeof(uint32_t);
   preferences.end();
-  return generationWritten;
+  return activityWritten;
+}
+
+route::RouteOrderActivity PreferencesRouteOrderStore::activity() {
+  Preferences preferences;
+  if (!preferences.begin(NAMESPACE, true))
+    return route::RouteOrderActivity::INACTIVE;
+  const uint32_t generationA = preferences.getUInt(GENERATION_KEYS[0], 0);
+  const uint32_t generationB = preferences.getUInt(GENERATION_KEYS[1], 0);
+  const uint32_t current = generationA > generationB ? generationA : generationB;
+  const uint32_t active = preferences.getUInt(ACTIVE_GENERATION_KEY, 0);
+  const uint32_t completed = preferences.getUInt(COMPLETED_GENERATION_KEY, 0);
+  preferences.end();
+  if (current != 0 && current == completed)
+    return route::RouteOrderActivity::COMPLETED;
+  if (current != 0 && current == active) return route::RouteOrderActivity::ACTIVE;
+  return route::RouteOrderActivity::INACTIVE;
+}
+
+bool PreferencesRouteOrderStore::markCompleted() {
+  Preferences preferences;
+  if (!preferences.begin(NAMESPACE, false)) return false;
+  const uint32_t generationA = preferences.getUInt(GENERATION_KEYS[0], 0);
+  const uint32_t generationB = preferences.getUInt(GENERATION_KEYS[1], 0);
+  const uint32_t current = generationA > generationB ? generationA : generationB;
+  const bool saved = current != 0 &&
+                     preferences.putUInt(COMPLETED_GENERATION_KEY, current) ==
+                         sizeof(uint32_t) &&
+                     preferences.putUInt(ACTIVE_GENERATION_KEY, 0) ==
+                         sizeof(uint32_t);
+  preferences.end();
+  return saved;
 }
 
 bool PreferencesRouteOrderStore::clear() {

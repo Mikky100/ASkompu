@@ -931,8 +931,8 @@ void testDistanceMathAndLongRunSaturate() {
   for (uint32_t index = 0; index < 43000; ++index) {
     pulse(fixture.application, UINT32_MAX, 1, 2, 2);
   }
-  TEST_ASSERT_EQUAL_UINT64(std::numeric_limits<uint64_t>::max(),
-                           fixture.application.trip1DistanceMillimeters());
+  TEST_ASSERT_EQUAL_INT64(std::numeric_limits<int64_t>::max(),
+                          fixture.application.trip1DistanceMillimeters());
 }
 
 void testButtonDebounceAndLongRepeatSemantics() {

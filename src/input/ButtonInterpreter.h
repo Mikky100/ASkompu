@@ -20,6 +20,7 @@ class ButtonInterpreter {
   void reset(bool pressed, uint32_t nowMs);
   ButtonTransitions update(bool rawPressed, uint32_t nowMs);
   bool isPressed() const { return stablePressed_; }
+  bool longStarted() const { return longStarted_; }
 
  private:
   const uint32_t debounceMs_;

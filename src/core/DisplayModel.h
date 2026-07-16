@@ -4,6 +4,7 @@
 
 #include "Clock.h"
 #include "domain/DisplaySetting.h"
+#include "domain/CompetitionEngine.h"
 #include "route/RouteOrderEditor.h"
 
 namespace core {
@@ -14,6 +15,7 @@ enum class Screen : uint8_t {
   Menu,
   TimeEdit,
   CalibrationEdit,
+  OrderAccessPrompt,
   OrderEdit,
   Diagnostics,
 };
@@ -21,7 +23,7 @@ enum class Screen : uint8_t {
 enum class TimeField : uint8_t { Hour, Minute };
 
 struct TripDisplayModel {
-  uint64_t distanceMillimeters;
+  int64_t distanceMillimeters;
   bool visible;
 };
 
@@ -44,6 +46,26 @@ struct OrderDisplayModel {
   bool showsStartTime;
 };
 
+enum class OrderAccessAction : uint8_t { Edit, Replace };
+
+struct OrderAccessDisplayModel {
+  OrderAccessAction selectedAction;
+};
+
+struct CompetitionDisplayModel {
+  domain::CompetitionState state;
+  int64_t deltaSeconds;
+  bool deltaFrozen;
+  domain::SegmentDefinition currentSegment;
+  bool hasCurrentSegment;
+  domain::SegmentDefinition nextSegment;
+  bool hasNextSegment;
+  bool undoPromptVisible;
+  bool jatNotImplemented;
+  bool pointLongPressNotImplemented;
+  bool atNotImplemented;
+};
+
 constexpr uint8_t MENU_VISIBLE_ROWS = 5;
 
 struct MenuRowDisplayModel {
@@ -63,14 +85,14 @@ struct MenuDisplayModel {
 
 struct DiagnosticsDisplayModel {
   Screen currentScreen;
-  bool buttonPressed[5];
+  bool buttonPressed[8];
   uint8_t lastButtonId;
   uint8_t lastButtonEventType;
   uint64_t totalPulseCount;
   uint64_t trip1PulseCount;
   uint64_t trip2PulseCount;
-  uint64_t trip1DistanceMillimeters;
-  uint64_t trip2DistanceMillimeters;
+  int64_t trip1DistanceMillimeters;
+  int64_t trip2DistanceMillimeters;
   uint32_t millimetersPerPulse;
   float speedKmh;
   uint32_t lastPulseAgeMilliseconds;
@@ -78,6 +100,9 @@ struct DiagnosticsDisplayModel {
   bool clockSet;
   ClockTime clock;
   uint64_t clockElapsedMilliseconds;
+  uint8_t lastPointEventType;
+  uint8_t lastAtEventType;
+  bool reverseActive;
 };
 
 struct DisplayModel {
@@ -90,6 +115,8 @@ struct DisplayModel {
   TimeEntryDisplayModel timeEntry;
   CalibrationDisplayModel calibration;
   OrderDisplayModel order;
+  OrderAccessDisplayModel orderAccess;
+  CompetitionDisplayModel competition;
   MenuDisplayModel menu;
   DiagnosticsDisplayModel diagnostics;
 };

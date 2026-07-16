@@ -4,6 +4,19 @@ This branch contains a hardware-independent ASkompu application shell and a
 320x170 LilyGO T-Display S3 adapter. The normative product and interaction
 specification is the [ASkompu GitHub Wiki](https://github.com/Mikky100/ASkompu/wiki).
 
+## First competition-calculation phase
+
+TIME and SPEED calculation, start waiting, normal points, immediate point
+undo, and finish run in RAM. The stored route order has separate active and
+completed metadata so a completed order is not started again. Rapidly changing
+competition state is not written to NVS.
+
+An in-progress runtime state and the finish result are not yet restored after
+power loss. A JAT point leaves calculation state unchanged and exposes a
+controlled not-implemented notification. `JAT_RESULT`, start proposals,
+MLA/ULA flows, scoring, and the persistent `EventRecord` log remain for the
+next phase.
+
 ## Startup and software clock
 
 Every boot starts in an unskippable time-entry view. Time is entered as `H:MM`:
@@ -62,15 +75,16 @@ no NVS write, and one changed accepted value requests one controlled write.
 Time editing uses the startup editor semantics, but cancel preserves the old
 clock and acceptance resets seconds to `00` without touching NVS.
 
-Trip resets have no confirmation, as required by the wiki. GPIO14 holds only
-Trip 1 at zero while pressed. The menu can reset either trip independently.
-Neither reset changes total pulse count, and navigation never stops pulse
-processing.
+Trip resets have no confirmation. In the LilyGO test profile GPIO11 resets only
+Trip 2; Trip 1 and foot reset remain core operations but have no physical GPIO.
+GPIO14 is exclusively the Point button. Neither reset changes total pulse
+count, competition distance, or speed calculation.
 
 ## Diagnostics
 
 `Järjestelmä > Diagnostiikka` is an explicitly developmental view. It shows the
-debounced Left/Up/Down/Right/GPIO14 states, latest semantic button event,
+debounced Left/Up/Down/Right/Point/AT/Trip2 states, latest Point and AT events,
+the filtered reverse state,
 total/Trip 1/Trip 2 pulse counts, both trip distances, mm/pulse calibration,
 speed, last-pulse age and zero-timeout state, current UI state, software-clock
 state/time, and elapsed time since clock acceptance. Left closes it. Opening or
@@ -96,6 +110,10 @@ segment, and Left returns or abandons the in-progress edit. A long Right opens
 the `UUSI AJOMAARAYS?` confirmation; Left declines and Right starts a separate
 replacement draft. Competition type is not part of ordinary editing.
 
+In `WAIT_START` and `RUNNING`, opening `AJOMAARAYS` first shows `MUOKKAA
+AJOMAARAYS`. Up/Down toggles to `KORVAA AJOMAARAYS`, Right confirms the selected
+workflow, and Left returns to the menu.
+
 The domain model and validator are in `src/domain/RouteOrder.*`. The editor,
 binary codec, and UI-independent storage port are in `src/route/`. The ESP32
 adapter stores a checksum-protected blob in alternating Preferences slots. It
@@ -120,8 +138,9 @@ import adapter.
   rollover-safe software clock.
 - `src/domain/` contains calculation, saturation, trip, speed, and calibration
   primitives.
-- `src/input/` adapts active-low buttons and interrupt-driven pulses.
-  `ButtonInterpreter` is native-testable.
+- `src/input/` adapts active-low buttons, the reverse level, and
+  interrupt-driven pulses. `ButtonInterpreter` and the 20 ms continuous-level
+  `StableSignalFilter` are native-testable.
 - `src/ports/ArduinoClock.h` is the `millis()`/`micros()` adapter.
 - `src/settings/` is the only Preferences/NVS adapter. It stores calibration,
   never wall-clock time.
@@ -156,8 +175,9 @@ display, NVS, or board. They cover clock validation/entry/acceptance, restart,
 minute/hour/day transitions, multi-day running and rollover; basic DisplayModel
 contents; menu opening, wrapping, clamping, scrolling, disabled items and
 return paths; clock editing; calibration cancel/accept/failure/write requests;
-diagnostics; independent trip resets; pulses in every relevant UI state;
-motion math, saturation, debounce, speed timeout, and the generator cycle.
+diagnostics; independent trip resets; Point/AT timing; signed forward/reverse
+distance; reverse-level filtering; pulses in every relevant UI state; motion
+math, saturation, debounce, speed timeout, and the generator cycle.
 
 ## Pulse generator test cycle
 
@@ -192,14 +212,19 @@ out-of-range storage falls back safely to `1000 mm/pulse`.
 | Up | 2 |
 | Down | 3 |
 | Right | 10 |
-| Trip 1 reset | 14 |
+| Trip 2 reset | 11 |
+| AT | 12 |
+| Reverse level, active LOW | 13 |
+| Point, LilyGO board button | 14 |
 | Speed/distance pulse | 16 |
 
-Arrow and Trip 1 inputs are active LOW. No GPIO has been invented for Point,
-AT, reverse, Trip 2 reset, or foot reset. Trip 2 is currently reset from the
-menu or a semantic core event. Competition inputs, RTC hardware, external trip
-display link, reverse input, scoring/event storage, and order/segment domain
-remain physically or logically unavailable.
+All buttons use active LOW with internal pull-ups. Reverse is a continuous
+active-LOW input with a 20 ms stability filter; its stable value is sampled
+before each pulse batch. Point long-press starts at 1200 ms without repeat, and
+its release cannot also create a short point. Trip 1 reset and foot reset are
+not physically connected in this profile. RTC hardware, external trip display,
+AT domain behavior, additional-order/TK behavior, scoring, and persistent event
+storage remain unavailable.
 
 ## Physical verification checklist
 
@@ -215,9 +240,9 @@ remain physically or logically unavailable.
    to `00` and continue from the acceptance instant.
 6. Open calibration, test cancel, unchanged accept, changed successful save,
    failed-save indication, and persistence after a power cycle.
-7. Reset each trip from the menu; verify the other trip and total pulse count do
-   not change. Hold GPIO14 and verify only Trip 1 stays at zero until release.
-8. Open diagnostics and exercise all five wired buttons. Verify live states,
+7. Press GPIO11 and verify only Trip 2 resets. Confirm GPIO14 never resets or
+   pauses Trip 1 accumulation.
+8. Open diagnostics and exercise Point, AT, Trip 2, and reverse. Verify live states,
    pulse/trip/calibration/speed/clock data, clean Left exit, and no state reset.
 9. Run the full generator cycle: observe 36/60/120 km/h, zero in each pause,
    no pause distance, and exactly 1800 pulses / 1.800 km when trips are unreset.
@@ -227,6 +252,12 @@ remain physically or logically unavailable.
     backlight, contrast, and flicker for the full 120-second run.
 12. Verify the two boards share GND and 3.3 V logic only; with separate USB
     supplies, do not connect their 5 V pins.
+13. During a pulse run, pull GPIO13 LOW and verify trip and competition distance
+    decrease while displayed speed remains positive; release it and verify
+    distance increases without losing a pulse batch.
+14. Verify a short GPIO14 press advances one point on release, a press longer
+    than 1200 ms only shows the controlled not-implemented TK message, and the
+    finish point freezes the result.
 
 Firmware upload and serial-port testing are intentionally outside the automated
 workflow.
