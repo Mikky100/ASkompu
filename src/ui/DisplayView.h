@@ -35,8 +35,13 @@ class DisplayView : public DisplayPort {
 
   TFT_eSPI display_;
   TFT_eSprite canvas_;
+  core::DisplayModel lastModel_{};
+  core::Screen renderedScreen_ = core::Screen::StartupTimeEntry;
+  uint32_t menuTitleFingerprint_ = 0;
+  uint32_t menuRowsFingerprint_ = 0;
   uint16_t textColor_ = TFT_WHITE;
   bool spriteReady_ = false;
+  bool hasRendered_ = false;
 };
 
 }  // namespace ui

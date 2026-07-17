@@ -655,7 +655,7 @@ void testLongMainMenuScrollKeepsSelectionVisible() {
   press(fixture.application, core::ButtonId::Up);
   const core::MenuDisplayModel menu = fixture.application.displayModel().menu;
   TEST_ASSERT_EQUAL_UINT8(6, menu.selectedIndex);
-  TEST_ASSERT_EQUAL_UINT8(2, menu.scrollOffset);
+  TEST_ASSERT_EQUAL_UINT8(7 - core::MENU_VISIBLE_ROWS, menu.scrollOffset);
   TEST_ASSERT_TRUE(menu.selectedVisibleRow < menu.visibleRowCount);
 }
 
@@ -961,6 +961,24 @@ void testButtonDebounceAndLongRepeatSemantics() {
   TEST_ASSERT_FALSE(released.shortPress);
 }
 
+void testDeferredButtonEdgesPreserveShortPress() {
+  input::ButtonInterpreter interpreter(35, 500, 100);
+  interpreter.reset(false, 0);
+
+  // Model an edge queue drained after both physical edges have occurred. The
+  // previous level is advanced to each interrupt timestamp before applying the
+  // new level, just as DebouncedButton does outside the ISR.
+  interpreter.update(false, 10);
+  interpreter.update(true, 10);
+  TEST_ASSERT_TRUE(interpreter.update(true, 110).pressed);
+  interpreter.update(false, 110);
+  const input::ButtonTransitions released = interpreter.update(false, 210);
+
+  TEST_ASSERT_TRUE(released.released);
+  TEST_ASSERT_TRUE(released.shortPress);
+  TEST_ASSERT_FALSE(released.longStart);
+}
+
 void openDebugMenu(Fixture& fixture) {
   openMainAt(fixture, 6);
   press(fixture.application, core::ButtonId::Right);
@@ -1064,6 +1082,7 @@ int main(int, char**) {
   RUN_TEST(testCalibrationChangeAffectsOnlyFuturePulses);
   RUN_TEST(testDistanceMathAndLongRunSaturate);
   RUN_TEST(testButtonDebounceAndLongRepeatSemantics);
+  RUN_TEST(testDeferredButtonEdgesPreserveShortPress);
   RUN_TEST(testDebugSpeedDefaultsOffAndUnknownBitsAreFiltered);
   RUN_TEST(testDebugSpeedCanBeEnabledDisabledAndFailureKeepsOldValue);
   RUN_TEST(testUnchangedDebugSettingDoesNotRequestPersistentWrite);

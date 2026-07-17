@@ -765,6 +765,32 @@ void testFinishRequestsPersistentCompletion() {
   TEST_ASSERT_FALSE(app.takeRouteOrderCompletionRequest());
 }
 
+void testFinishResultDismissesWithEitherHorizontalButton() {
+  for (const core::ButtonId dismissButton : {core::ButtonId::Left,
+                                             core::ButtonId::Right}) {
+    FakeTimeSource source;
+    core::SoftwareClock clock(source);
+    core::ApplicationCore app(clock, 1000, 1000000);
+    app.setInitialRouteOrder(
+        orderWith(segment(0, domain::SegmentType::TIME, 1)), true);
+    acceptNoon(app);
+    press(app, core::ButtonId::Point, core::ButtonEventType::Release);
+
+    TEST_ASSERT_TRUE(app.displayModel().finishResult.visible);
+    press(app, dismissButton);
+
+    const core::DisplayModel dismissed = app.displayModel();
+    TEST_ASSERT_FALSE(dismissed.finishResult.visible);
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(domain::CompetitionState::IDLE),
+        static_cast<uint8_t>(dismissed.competition.state));
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(domain::CompetitionState::FINISHED),
+        static_cast<uint8_t>(app.competition().state()));
+    TEST_ASSERT_EQUAL_size_t(1, app.competition().stageResults().size());
+  }
+}
+
 void testResultMenusShowStageTotalAndOrderedEvents() {
   FakeTimeSource source;
   core::SoftwareClock clock(source);
@@ -1306,6 +1332,7 @@ int main(int, char**) {
   RUN_TEST(testJatResultRightSkipsAndTimeoutTransitions);
   RUN_TEST(testAcceptedStartCorrectionPreservesPhysicalZeroAndCanCancel);
   RUN_TEST(testFinishRequestsPersistentCompletion);
+  RUN_TEST(testFinishResultDismissesWithEitherHorizontalButton);
   RUN_TEST(testResultMenusShowStageTotalAndOrderedEvents);
   RUN_TEST(testCoreEventAuditIncludesPointUndoReverseTripAndStageResult);
   RUN_TEST(testPulseGeneratorCycleIntegration);

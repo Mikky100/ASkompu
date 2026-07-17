@@ -14,7 +14,7 @@
 
 namespace {
 
-constexpr uint32_t DEBOUNCE_MS = 35;
+constexpr uint32_t DEBOUNCE_MS = 20;
 constexpr uint32_t POLL_INTERVAL_MS = 10;
 constexpr uint32_t POINT_LONG_PRESS_MS = 1200;
 constexpr uint32_t REVERSE_STABILITY_MS = 20;
@@ -72,35 +72,50 @@ ui::DisplayView view;
 uint32_t lastDisplayUpdateMs = 0;
 core::Screen renderedScreen = core::Screen::StartupTimeEntry;
 
-void dispatchButton(input::DebouncedButton& button, core::ButtonId id,
+bool dispatchButton(input::DebouncedButton& button, core::ButtonId id,
                     uint32_t nowMs) {
+  bool dispatched = false;
   if (button.consumePressedEvent()) {
     application.handleButton({id, core::ButtonEventType::Press, nowMs});
+    dispatched = true;
   }
   if (button.consumeReleasedEvent()) {
     application.handleButton({id, core::ButtonEventType::Release, nowMs});
+    dispatched = dispatched || id == core::ButtonId::At ||
+                 application.screen() == core::Screen::Diagnostics;
   }
   if (button.consumeLongPressEvent()) {
     application.handleButton({id, core::ButtonEventType::LongStart, nowMs});
+    dispatched = true;
   }
   if (button.consumeRepeatEvent()) {
     application.handleButton({id, core::ButtonEventType::LongRepeat, nowMs});
+    dispatched = true;
   }
+  return dispatched;
 }
 
-void dispatchPointButton(uint32_t nowMs) {
-  if (pointButton.consumePressedEvent())
+bool dispatchPointButton(uint32_t nowMs) {
+  bool dispatched = false;
+  if (pointButton.consumePressedEvent()) {
     application.handleButton(
         {core::ButtonId::Point, core::ButtonEventType::Press, nowMs});
-  if (pointButton.consumeLongPressEvent())
+    dispatched = application.screen() == core::Screen::Diagnostics;
+  }
+  if (pointButton.consumeLongPressEvent()) {
     application.handleButton(
         {core::ButtonId::Point, core::ButtonEventType::LongStart, nowMs});
+    dispatched = true;
+  }
   if (pointButton.consumeReleasedEvent()) {
     const bool shortPress = pointButton.consumeShortPressEvent();
-    if (shortPress)
+    if (shortPress) {
       application.handleButton(
           {core::ButtonId::Point, core::ButtonEventType::Release, nowMs});
+      dispatched = true;
+    }
   }
+  return dispatched;
 }
 
 }  // namespace
@@ -192,18 +207,22 @@ void loop() {
   const input::PulseSnapshot pulseSnapshot = pulseInput.consumeSnapshot();
   const uint32_t nowUs = clockSource.monotonicMicroseconds();
 
-  dispatchButton(leftButton, core::ButtonId::Left, nowMs);
-  dispatchButton(upButton, core::ButtonId::Up, nowMs);
-  dispatchButton(downButton, core::ButtonId::Down, nowMs);
-  dispatchButton(rightButton, core::ButtonId::Right, nowMs);
-  dispatchPointButton(nowMs);
-  dispatchButton(atButton, core::ButtonId::At, nowMs);
-  dispatchButton(trip2ResetButton, core::ButtonId::Trip2Reset, nowMs);
+  bool inputDispatched = false;
+  inputDispatched |= dispatchButton(leftButton, core::ButtonId::Left, nowMs);
+  inputDispatched |= dispatchButton(upButton, core::ButtonId::Up, nowMs);
+  inputDispatched |= dispatchButton(downButton, core::ButtonId::Down, nowMs);
+  inputDispatched |= dispatchButton(rightButton, core::ButtonId::Right, nowMs);
+  inputDispatched |= dispatchPointButton(nowMs);
+  inputDispatched |= dispatchButton(atButton, core::ButtonId::At, nowMs);
+  inputDispatched |=
+      dispatchButton(trip2ResetButton, core::ButtonId::Trip2Reset, nowMs);
 #ifdef ASKOMPU_HAS_TRIP1_RESET_PIN
-  dispatchButton(trip1ResetButton, core::ButtonId::Trip1Reset, nowMs);
+  inputDispatched |=
+      dispatchButton(trip1ResetButton, core::ButtonId::Trip1Reset, nowMs);
 #endif
 #ifdef ASKOMPU_HAS_FOOT_RESET_PIN
-  dispatchButton(footResetButton, core::ButtonId::FootReset, nowMs);
+  inputDispatched |=
+      dispatchButton(footResetButton, core::ButtonId::FootReset, nowMs);
 #endif
 
   if (pulseSnapshot.pendingPulses > 0) {
@@ -252,8 +271,17 @@ void loop() {
 
   const core::DisplayModel displayModel = application.displayModel();
   const bool screenChanged = displayModel.screen != renderedScreen;
-  if (screenChanged ||
-      nowMs - lastDisplayUpdateMs >= BoardConfig::DISPLAY_UPDATE_INTERVAL_MS) {
+  const bool periodicScreen =
+      displayModel.screen == core::Screen::BasicView ||
+      displayModel.screen == core::Screen::StartTimeEdit ||
+      displayModel.screen == core::Screen::Diagnostics;
+  const uint32_t periodicIntervalMs =
+      displayModel.screen == core::Screen::Diagnostics
+          ? 2000UL
+          : BoardConfig::DISPLAY_UPDATE_INTERVAL_MS;
+  if (inputDispatched || screenChanged ||
+      (periodicScreen &&
+       nowMs - lastDisplayUpdateMs >= periodicIntervalMs)) {
     view.render(displayModel);
     renderedScreen = displayModel.screen;
     lastDisplayUpdateMs = nowMs;

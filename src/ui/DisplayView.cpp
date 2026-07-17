@@ -2,6 +2,7 @@
 
 #include <inttypes.h>
 #include <cstdio>
+#include <cstring>
 
 #include "BoardConfig.h"
 #include "DisplayLayout.h"
@@ -106,6 +107,75 @@ const char* eventTypeName(domain::DomainEventType type) {
   return "TAPAHTUMA";
 }
 
+uint32_t textFingerprint(const char* text) {
+  uint32_t hash = 2166136261UL;
+  if (!text) return hash;
+  while (*text) {
+    hash ^= static_cast<uint8_t>(*text++);
+    hash *= 16777619UL;
+  }
+  return hash;
+}
+
+uint32_t menuRowsFingerprint(const core::MenuDisplayModel& model) {
+  uint32_t hash = 2166136261UL;
+  hash = (hash ^ model.visibleRowCount) * 16777619UL;
+  hash = (hash ^ model.scrollOffset) * 16777619UL;
+  hash = (hash ^ model.totalRows) * 16777619UL;
+  for (uint8_t row = 0; row < model.visibleRowCount; ++row) {
+    hash ^= textFingerprint(model.rows[row].label);
+    hash *= 16777619UL;
+    hash = (hash ^ model.rows[row].enabled) * 16777619UL;
+  }
+  return hash;
+}
+
+bool sameClock(const core::ClockTime& first, const core::ClockTime& second) {
+  return first.hour == second.hour && first.minute == second.minute &&
+         first.second == second.second;
+}
+
+bool sameSegment(const domain::SegmentDefinition& first,
+                 const domain::SegmentDefinition& second) {
+  return first.segmentIndex == second.segmentIndex &&
+         first.startPointIndex == second.startPointIndex &&
+         first.endPointIndex == second.endPointIndex &&
+         first.segmentType == second.segmentType && first.value == second.value &&
+         first.hasMittisDuration == second.hasMittisDuration &&
+         first.mittisDurationSeconds == second.mittisDurationSeconds &&
+         first.pointTypeAtEnd == second.pointTypeAtEnd &&
+         first.hasJatType == second.hasJatType &&
+         first.jatType == second.jatType &&
+         first.hasJatOffsetMinutes == second.hasJatOffsetMinutes &&
+         first.jatOffsetMinutes == second.jatOffsetMinutes;
+}
+
+bool sameCompetition(const core::CompetitionDisplayModel& first,
+                     const core::CompetitionDisplayModel& second) {
+  return first.state == second.state &&
+         first.deltaSeconds == second.deltaSeconds &&
+         first.deltaFrozen == second.deltaFrozen &&
+         first.hasCurrentSegment == second.hasCurrentSegment &&
+         first.hasNextSegment == second.hasNextSegment &&
+         first.undoPromptVisible == second.undoPromptVisible &&
+         (!first.hasCurrentSegment ||
+          sameSegment(first.currentSegment, second.currentSegment)) &&
+         (!first.hasNextSegment ||
+          sameSegment(first.nextSegment, second.nextSegment));
+}
+
+bool sameAtOverlay(const core::AtOverlayDisplayModel& first,
+                   const core::AtOverlayDisplayModel& second) {
+  return first.visible == second.visible &&
+         first.clockTime.hour == second.clockTime.hour &&
+         first.clockTime.minute == second.clockTime.minute &&
+         first.clockTime.second == second.clockTime.second &&
+         first.waitingForStop == second.waitingForStop &&
+         first.travelledDistanceMillimeters ==
+             second.travelledDistanceMillimeters &&
+         first.targetDistanceMeters == second.targetDistanceMeters;
+}
+
 }  // namespace
 
 DisplayView::DisplayView() : canvas_(&display_) {}
@@ -205,7 +275,91 @@ void DisplayView::render(const core::DisplayModel& model) {
       showDiagnostics(model.diagnostics);
       break;
   }
-  canvas_.pushSprite(0, 0);
+  const bool sameScreen = hasRendered_ && renderedScreen_ == model.screen;
+  const bool colorChanged = hasRendered_ &&
+                            lastModel_.textColor != model.textColor;
+  if (!sameScreen || colorChanged) {
+    canvas_.pushSprite(0, 0);
+  } else if (model.screen == core::Screen::Menu) {
+    const uint32_t titleFingerprint = textFingerprint(model.menu.title);
+    const uint32_t rowsFingerprint = menuRowsFingerprint(model.menu);
+    if (titleFingerprint != menuTitleFingerprint_) {
+      canvas_.pushSprite(0, 0);
+    } else if (rowsFingerprint != menuRowsFingerprint_) {
+      const int16_t top = BoardConfig::DISPLAY_WIDTH >= 480 ? 56 : 30;
+      canvas_.pushSprite(0, top, 0, top, BoardConfig::DISPLAY_WIDTH,
+                         BoardConfig::DISPLAY_HEIGHT - top);
+    } else if (lastModel_.menu.selectedVisibleRow !=
+               model.menu.selectedVisibleRow) {
+      const int16_t top = BoardConfig::DISPLAY_WIDTH >= 480 ? 56 : 30;
+      const int16_t rowHeight =
+          (BoardConfig::DISPLAY_HEIGHT - top - 8) /
+          core::MENU_VISIBLE_ROWS;
+      const int16_t oldY =
+          top + lastModel_.menu.selectedVisibleRow * rowHeight;
+      const int16_t newY = top + model.menu.selectedVisibleRow * rowHeight;
+      canvas_.pushSprite(0, oldY, 0, oldY, 12, rowHeight);
+      canvas_.pushSprite(0, newY, 0, newY, 12, rowHeight);
+    }
+    menuTitleFingerprint_ = titleFingerprint;
+    menuRowsFingerprint_ = rowsFingerprint;
+  } else if (model.screen == core::Screen::BasicView) {
+    const DisplayLayout layout =
+        layoutFor(BoardConfig::DISPLAY_WIDTH, BoardConfig::DISPLAY_HEIGHT);
+    if (lastModel_.finishResult.visible != model.finishResult.visible) {
+      canvas_.pushSprite(0, 0);
+    } else if (model.finishResult.visible) {
+      // The finish values are frozen; no periodic transfer is necessary.
+    } else {
+      if (lastModel_.trip1.distanceMillimeters !=
+          model.trip1.distanceMillimeters) {
+        canvas_.pushSprite(layout.trip1.x, layout.trip1.y, layout.trip1.x,
+                           layout.trip1.y, layout.trip1.width,
+                           layout.trip1.height);
+      }
+      if (!sameClock(lastModel_.clock, model.clock)) {
+        canvas_.pushSprite(layout.clock.x, layout.clock.y, layout.clock.x,
+                           layout.clock.y, layout.clock.width,
+                           layout.clock.height);
+      }
+      if (!sameCompetition(lastModel_.competition, model.competition) ||
+          !sameAtOverlay(lastModel_.atOverlay, model.atOverlay)) {
+        const int16_t top = layout.currentSegment.y;
+        canvas_.pushSprite(0, top, 0, top, BoardConfig::DISPLAY_WIDTH,
+                           BoardConfig::DISPLAY_HEIGHT - top);
+      } else if (model.showSpeed &&
+                 lastModel_.speedKmh != model.speedKmh) {
+        canvas_.pushSprite(layout.debugSpeed.x, layout.debugSpeed.y,
+                           layout.debugSpeed.x, layout.debugSpeed.y,
+                           layout.debugSpeed.width, layout.debugSpeed.height);
+      }
+    }
+  } else if (model.screen == core::Screen::StartupTimeEntry ||
+             model.screen == core::Screen::TimeEdit) {
+    const int16_t top = BoardConfig::DISPLAY_WIDTH >= 480 ? 80 : 45;
+    const int16_t bottom = BoardConfig::DISPLAY_WIDTH >= 480 ? 210 : 125;
+    canvas_.pushSprite(0, top, 0, top, BoardConfig::DISPLAY_WIDTH,
+                       bottom - top);
+  } else if (model.screen == core::Screen::OrderEdit) {
+    const int16_t top = BoardConfig::DISPLAY_WIDTH >= 480 ? 80 : 40;
+    const int16_t bottom = BoardConfig::DISPLAY_HEIGHT - 34;
+    canvas_.pushSprite(0, top, 0, top, BoardConfig::DISPLAY_WIDTH,
+                       bottom - top);
+  } else if (model.screen == core::Screen::Diagnostics) {
+    canvas_.pushSprite(0, 0);
+  } else {
+    const int16_t height = BoardConfig::DISPLAY_HEIGHT > 190
+                               ? 190
+                               : BoardConfig::DISPLAY_HEIGHT;
+    canvas_.pushSprite(0, 0, 0, 0, BoardConfig::DISPLAY_WIDTH, height);
+  }
+  renderedScreen_ = model.screen;
+  lastModel_ = model;
+  if (model.screen == core::Screen::Menu) {
+    menuTitleFingerprint_ = textFingerprint(model.menu.title);
+    menuRowsFingerprint_ = menuRowsFingerprint(model.menu);
+  }
+  hasRendered_ = true;
 }
 
 void DisplayView::showResultView(const core::ResultViewDisplayModel& model) {
@@ -258,6 +412,7 @@ void DisplayView::showResultView(const core::ResultViewDisplayModel& model) {
                   model.selectedIndex + 1, model.itemCount);
     canvas_.drawString(position, BoardConfig::DISPLAY_WIDTH / 2, 139, 1);
   }
+  canvas_.setTextColor(textColor_, TFT_BLACK);
   canvas_.drawString("YLOS/ALAS SELAA   VASEN PALAA",
                      BoardConfig::DISPLAY_WIDTH / 2, 158, 1);
 }
@@ -276,7 +431,7 @@ void DisplayView::showOverrideMenu(
           : "TIEKATKO",
       BoardConfig::DISPLAY_WIDTH / 2, 78, 2);
   canvas_.setTextSize(1);
-  canvas_.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+  canvas_.setTextColor(textColor_, TFT_BLACK);
   canvas_.drawString("YLOS/ALAS   VASEN PERU   OIKEA AVAA",
                      BoardConfig::DISPLAY_WIDTH / 2, 150, 1);
 }
@@ -305,11 +460,11 @@ void DisplayView::showOverrideEdit(
   canvas_.setTextColor(model.invalid ? TFT_RED : textColor_, TFT_BLACK);
   canvas_.drawString(value, BoardConfig::DISPLAY_WIDTH / 2, 76, 2);
   canvas_.setTextSize(1);
-  canvas_.setTextColor(model.invalid ? TFT_RED : TFT_LIGHTGREY, TFT_BLACK);
+  canvas_.setTextColor(model.invalid ? TFT_RED : textColor_, TFT_BLACK);
   canvas_.drawString(model.invalid ? "VALINTA EI KELPAA"
                                    : "YLOS/ALAS MUUTTAA",
                      BoardConfig::DISPLAY_WIDTH / 2, 122, 1);
-  canvas_.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+  canvas_.setTextColor(textColor_, TFT_BLACK);
   canvas_.drawString("VASEN PALAA   OIKEA JATKAA",
                      BoardConfig::DISPLAY_WIDTH / 2, 151, 1);
 }
@@ -332,7 +487,7 @@ void DisplayView::showJatResult(const core::JatResultDisplayModel& model) {
   canvas_.setTextColor(TFT_YELLOW, TFT_BLACK);
   canvas_.drawString(delta, BoardConfig::DISPLAY_WIDTH / 2, 118, 2);
   canvas_.setTextSize(1);
-  canvas_.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+  canvas_.setTextColor(textColor_, TFT_BLACK);
   canvas_.drawString("OIKEA JATKAA", BoardConfig::DISPLAY_WIDTH / 2, 158, 1);
 }
 
@@ -349,7 +504,7 @@ void DisplayView::showStartTimeEdit(
   canvas_.setTextColor(model.valueVisible ? textColor_ : TFT_BLACK, TFT_BLACK);
   canvas_.drawString(value, BoardConfig::DISPLAY_WIDTH / 2, 75, 2);
   canvas_.setTextSize(1);
-  canvas_.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+  canvas_.setTextColor(textColor_, TFT_BLACK);
   canvas_.drawString("YLOS/ALAS +/- 1 MIN", BoardConfig::DISPLAY_WIDTH / 2,
                      124, 1);
   canvas_.drawString(model.acceptsWithPoint ? "VAIHTOPISTE HYVAKSYY"
@@ -373,11 +528,11 @@ void DisplayView::showMittis(const core::MittisDisplayModel& model) {
   canvas_.setTextColor(model.saveFailed ? TFT_RED : textColor_, TFT_BLACK);
   canvas_.drawString(valueText, BoardConfig::DISPLAY_WIDTH / 2, 72, 2);
   canvas_.setTextSize(1);
-  canvas_.setTextColor(model.saveFailed ? TFT_RED : TFT_LIGHTGREY, TFT_BLACK);
+  canvas_.setTextColor(model.saveFailed ? TFT_RED : textColor_, TFT_BLACK);
   canvas_.drawString(model.saveFailed ? "TALLENNUSVIRHE - VANHA KERROIN"
                                       : (model.valid ? "VAIHDA?" : "VASEN JATKAA"),
                      BoardConfig::DISPLAY_WIDTH / 2, 116, 1);
-  canvas_.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+  canvas_.setTextColor(textColor_, TFT_BLACK);
   canvas_.drawString(model.valid ? "VASEN HYLKAA   OIKEA HYVAKSYY"
                                  : "VASEN HYLKAA EHDOTUKSEN",
                      BoardConfig::DISPLAY_WIDTH / 2, 150, 1);
@@ -394,7 +549,7 @@ void DisplayView::showOrderAccess(const core::OrderAccessDisplayModel& model) {
   canvas_.drawString(edit ? "MUOKKAA AJOMAARAYS" : "KORVAA AJOMAARAYS",
                      BoardConfig::DISPLAY_WIDTH / 2, 78, 2);
   canvas_.setTextSize(1);
-  canvas_.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+  canvas_.setTextColor(textColor_, TFT_BLACK);
   canvas_.drawString("YLOS/ALAS VAIHTAA   OIKEA HYVAKSYY",
                      BoardConfig::DISPLAY_WIDTH / 2, 150, 1);
 }
@@ -407,7 +562,6 @@ void DisplayView::showBasicView(const core::DisplayModel& model) {
   char clockText[12];
   char speedText[18];
   char trip1Text[24];
-  char trip2Text[24];
   char deltaText[24];
   char atText[12];
   char currentRange[16]{};
@@ -418,7 +572,6 @@ void DisplayView::showBasicView(const core::DisplayModel& model) {
                 model.clock.hour, model.clock.minute, model.clock.second);
   std::snprintf(speedText, sizeof(speedText), "%.0f km/h", model.speedKmh);
   formatTrip(trip1Text, sizeof(trip1Text), model.trip1.distanceMillimeters);
-  formatTrip(trip2Text, sizeof(trip2Text), model.trip2.distanceMillimeters);
   formatDelta(deltaText, sizeof(deltaText), model.competition.deltaSeconds);
   std::snprintf(atText, sizeof(atText), "%02u:%02u:%02u",
                 model.atOverlay.clockTime.hour, model.atOverlay.clockTime.minute,
@@ -449,14 +602,11 @@ void DisplayView::showBasicView(const core::DisplayModel& model) {
   canvas_.setTextColor(TFT_DARKGREY, TFT_BLACK);
   canvas_.setTextSize(1);
   canvas_.drawString("1", layout.trip1.x, layout.trip1.y, 1);
-  canvas_.drawString("2", layout.trip2.x, layout.trip2.y, 1);
 
   canvas_.setTextDatum(MC_DATUM);
   canvas_.setTextColor(textColor_, TFT_BLACK);
   canvas_.setTextSize(layout.topFont.value);
   canvas_.drawString(trip1Text, centerX(layout.trip1), centerY(layout.trip1),
-                     layout.topFont.face);
-  canvas_.drawString(trip2Text, centerX(layout.trip2), centerY(layout.trip2),
                      layout.topFont.face);
   canvas_.drawString(clockText, centerX(layout.clock), centerY(layout.clock),
                      layout.topFont.face);
@@ -485,7 +635,7 @@ void DisplayView::showBasicView(const core::DisplayModel& model) {
                        layout.currentSegment.y +
                            (layout.currentSegment.height * 2) / 3,
                        layout.segmentValueFont.face);
-    canvas_.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+    canvas_.setTextColor(textColor_, TFT_BLACK);
     canvas_.drawString(nextValue, centerX(layout.nextSegment),
                        layout.nextSegment.y +
                            (layout.nextSegment.height * 2) / 3,
@@ -502,7 +652,7 @@ void DisplayView::showBasicView(const core::DisplayModel& model) {
   if (model.competition.undoPromptVisible) {
     canvas_.setTextDatum(MR_DATUM);
     canvas_.setTextSize(layout.debugFont.value);
-    canvas_.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+    canvas_.setTextColor(textColor_, TFT_BLACK);
     canvas_.drawString("<- = PERU", layout.debugSpeed.right() - 4,
                        centerY(layout.debugSpeed), layout.debugFont.face);
   }
@@ -519,62 +669,80 @@ void DisplayView::showFinishResult(
                 model.totalPoints);
   canvas_.setTextDatum(TC_DATUM);
   canvas_.setTextColor(TFT_CYAN, TFT_BLACK);
+  canvas_.setTextSize(BoardConfig::DISPLAY_WIDTH >= 480 ? 2 : 1);
   canvas_.drawString("MAALI", BoardConfig::DISPLAY_WIDTH / 2, 8, 2);
   canvas_.setTextDatum(MC_DATUM);
-  canvas_.setTextSize(3);
+  canvas_.setTextSize(BoardConfig::DISPLAY_WIDTH >= 480 ? 4 : 3);
   canvas_.setTextColor(textColor_, TFT_BLACK);
-  canvas_.drawString(clockText, BoardConfig::DISPLAY_WIDTH / 2, 65, 2);
-  canvas_.setTextSize(2);
+  canvas_.drawString(clockText, BoardConfig::DISPLAY_WIDTH / 2,
+                     BoardConfig::DISPLAY_HEIGHT * 38 / 100, 2);
+  canvas_.setTextSize(BoardConfig::DISPLAY_WIDTH >= 480 ? 3 : 2);
   canvas_.setTextColor(TFT_YELLOW, TFT_BLACK);
-  canvas_.drawString(pointsText, BoardConfig::DISPLAY_WIDTH / 2, 122, 2);
+  canvas_.drawString(pointsText, BoardConfig::DISPLAY_WIDTH / 2,
+                     BoardConfig::DISPLAY_HEIGHT * 65 / 100, 2);
+  canvas_.setTextDatum(BC_DATUM);
+  canvas_.setTextSize(BoardConfig::DISPLAY_WIDTH >= 480 ? 2 : 1);
+  canvas_.setTextColor(textColor_, TFT_BLACK);
+  canvas_.drawString("VASEN/OIKEA PALAA", BoardConfig::DISPLAY_WIDTH / 2,
+                     BoardConfig::DISPLAY_HEIGHT - 8, 1);
 }
 
 void DisplayView::showTimeEntry(const core::TimeEntryDisplayModel& model) {
-  char hour[4];
-  char minute[4];
-  std::snprintf(hour, sizeof(hour), "%u", model.hour);
-  std::snprintf(minute, sizeof(minute), "%02u", model.minute);
+  char value[20];
+  if (model.activeField == core::TimeField::Hour)
+    std::snprintf(value, sizeof(value), "[%02u]:%02u", model.hour,
+                  model.minute);
+  else
+    std::snprintf(value, sizeof(value), "%02u:[%02u]", model.hour,
+                  model.minute);
+  const int16_t centerX = BoardConfig::DISPLAY_WIDTH / 2;
+  const int16_t valueY = BoardConfig::DISPLAY_HEIGHT * 46 / 100;
+  const uint8_t valueScale = BoardConfig::DISPLAY_WIDTH >= 480 ? 4 : 3;
   canvas_.setTextDatum(TC_DATUM);
   canvas_.setTextColor(TFT_CYAN, TFT_BLACK);
   canvas_.drawString(model.startup ? "ASETA KELLONAIKA" : "MUUTA KELLONAIKA",
-                     BoardConfig::DISPLAY_WIDTH / 2, 12, 2);
-  canvas_.setTextSize(3);
-  canvas_.setTextDatum(MR_DATUM);
-  canvas_.setTextColor(model.activeField == core::TimeField::Hour ? TFT_YELLOW
-                                                                  : textColor_,
-                       TFT_BLACK);
-  canvas_.drawString(hour, 145, 78, 2);
+                     centerX, 12, 2);
+  canvas_.setTextSize(valueScale);
   canvas_.setTextDatum(MC_DATUM);
   canvas_.setTextColor(textColor_, TFT_BLACK);
-  canvas_.drawString(":", 160, 78, 2);
-  canvas_.setTextDatum(ML_DATUM);
-  canvas_.setTextColor(model.activeField == core::TimeField::Minute
-                           ? TFT_YELLOW
-                           : textColor_,
-                       TFT_BLACK);
-  canvas_.drawString(minute, 175, 78, 2);
-  canvas_.setTextSize(1);
+  canvas_.drawString(value, centerX, valueY, 2);
+  canvas_.setTextSize(BoardConfig::DISPLAY_WIDTH >= 480 ? 2 : 1);
   canvas_.setTextDatum(BC_DATUM);
-  canvas_.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
-  canvas_.drawString("YLOS/ALAS MUUTTAA   OIKEA JATKAA", 160, 160, 1);
+  canvas_.setTextColor(textColor_, TFT_BLACK);
+  canvas_.drawString("YLOS/ALAS MUUTTAA   OIKEA JATKAA", centerX,
+                     BoardConfig::DISPLAY_HEIGHT - 8, 1);
 }
 
 void DisplayView::showMenu(const core::MenuDisplayModel& model) {
+  const bool large = BoardConfig::DISPLAY_WIDTH >= 480;
+  const int16_t top = large ? 56 : 30;
+  const int16_t rowHeight =
+      (BoardConfig::DISPLAY_HEIGHT - top - 8) / core::MENU_VISIBLE_ROWS;
   canvas_.setTextDatum(TC_DATUM);
   canvas_.setTextColor(TFT_CYAN, TFT_BLACK);
+  canvas_.setTextSize(large ? 2 : 1);
   canvas_.drawString(model.title, BoardConfig::DISPLAY_WIDTH / 2, 5, 2);
-  constexpr int16_t top = 27;
-  constexpr int16_t rowHeight = 27;
   for (uint8_t row = 0; row < model.visibleRowCount; ++row) {
     const bool selected = row == model.selectedVisibleRow;
-    const uint16_t background = selected ? TFT_DARKGREY : TFT_BLACK;
+    const uint16_t background = TFT_BLACK;
     canvas_.fillRect(5, top + row * rowHeight,
                      BoardConfig::DISPLAY_WIDTH - 10, rowHeight - 2,
                      background);
+    if (selected) {
+      canvas_.fillRect(5, top + row * rowHeight + 5, 5, rowHeight - 12,
+                       TFT_CYAN);
+    }
     canvas_.setTextDatum(ML_DATUM);
     canvas_.setTextColor(model.rows[row].enabled ? textColor_ : TFT_DARKGREY,
                          background);
-    canvas_.drawString(model.rows[row].label, 13,
+    uint8_t textScale = large ? 2 : 1;
+    canvas_.setTextSize(textScale);
+    while (textScale > 1 &&
+           canvas_.textWidth(model.rows[row].label, 2) >
+               BoardConfig::DISPLAY_WIDTH - 52) {
+      canvas_.setTextSize(--textScale);
+    }
+    canvas_.drawString(model.rows[row].label, 18,
                        top + row * rowHeight + rowHeight / 2, 2);
     if (!model.rows[row].enabled) {
       canvas_.setTextDatum(MR_DATUM);
@@ -583,10 +751,14 @@ void DisplayView::showMenu(const core::MenuDisplayModel& model) {
     }
   }
   if (model.scrollOffset > 0) {
-    canvas_.fillTriangle(310, 29, 305, 36, 315, 36, TFT_CYAN);
+    const int16_t x = BoardConfig::DISPLAY_WIDTH - 10;
+    canvas_.fillTriangle(x, top + 2, x - 6, top + 10, x + 6, top + 10,
+                         TFT_CYAN);
   }
   if (model.scrollOffset + model.visibleRowCount < model.totalRows) {
-    canvas_.fillTriangle(310, 163, 305, 156, 315, 156, TFT_CYAN);
+    const int16_t x = BoardConfig::DISPLAY_WIDTH - 10;
+    const int16_t y = BoardConfig::DISPLAY_HEIGHT - 4;
+    canvas_.fillTriangle(x, y, x - 6, y - 8, x + 6, y - 8, TFT_CYAN);
   }
 }
 
@@ -603,10 +775,10 @@ void DisplayView::showCalibration(
   canvas_.setTextColor(textColor_, TFT_BLACK);
   canvas_.drawString(valueText, BoardConfig::DISPLAY_WIDTH / 2, 75, 2);
   canvas_.setTextSize(1);
-  canvas_.setTextColor(model.saveFailed ? TFT_RED : TFT_LIGHTGREY, TFT_BLACK);
+  canvas_.setTextColor(model.saveFailed ? TFT_RED : textColor_, TFT_BLACK);
   canvas_.drawString(model.saveFailed ? "TALLENNUSVIRHE" : "YLOS/ALAS +/- 1",
                      BoardConfig::DISPLAY_WIDTH / 2, 118, 1);
-  canvas_.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+  canvas_.setTextColor(textColor_, TFT_BLACK);
   canvas_.drawString("VASEN HYLKAA   OIKEA HYVAKSYY",
                      BoardConfig::DISPLAY_WIDTH / 2, 148, 1);
 }
@@ -731,64 +903,89 @@ void DisplayView::showOrder(const core::OrderDisplayModel& model) {
   }
   canvas_.setTextDatum(TC_DATUM);
   canvas_.setTextColor(TFT_CYAN, TFT_BLACK);
+  canvas_.setTextSize(BoardConfig::DISPLAY_WIDTH >= 480 ? 2 : 1);
   canvas_.drawString(title, BoardConfig::DISPLAY_WIDTH / 2, 10, 2);
   canvas_.setTextDatum(MC_DATUM);
-  canvas_.setTextSize(2);
+  uint8_t primaryScale = BoardConfig::DISPLAY_WIDTH >= 480 ? 3 : 2;
+  canvas_.setTextSize(primaryScale);
+  while (primaryScale > 1 &&
+         canvas_.textWidth(primary, 2) > BoardConfig::DISPLAY_WIDTH - 16) {
+    canvas_.setTextSize(--primaryScale);
+  }
   canvas_.setTextColor(editor.saveFailed ? TFT_RED : textColor_, TFT_BLACK);
-  canvas_.drawString(primary, BoardConfig::DISPLAY_WIDTH / 2, 78, 2);
-  canvas_.setTextSize(1);
-  canvas_.setTextColor(editor.saveFailed ? TFT_RED : TFT_LIGHTGREY, TFT_BLACK);
+  canvas_.drawString(primary, BoardConfig::DISPLAY_WIDTH / 2,
+                     BoardConfig::DISPLAY_HEIGHT * 46 / 100, 2);
+  canvas_.setTextSize(BoardConfig::DISPLAY_WIDTH >= 480 ? 2 : 1);
+  canvas_.setTextColor(editor.saveFailed ? TFT_RED : textColor_, TFT_BLACK);
   canvas_.drawString(editor.saveFailed ? "TALLENNUSVIRHE"
                                        : "YLOS/ALAS   VASEN   OIKEA",
-                     BoardConfig::DISPLAY_WIDTH / 2, 150, 1);
+                     BoardConfig::DISPLAY_WIDTH / 2,
+                     BoardConfig::DISPLAY_HEIGHT - 10, 1);
 }
 
 void DisplayView::showDiagnostics(
     const core::DiagnosticsDisplayModel& model) {
   char line[48];
+  const bool large = BoardConfig::DISPLAY_WIDTH >= 480;
+  const uint8_t scale = large ? 2 : 1;
+  const int16_t lineHeight = large ? 25 : 14;
+  int16_t y = large ? 42 : 20;
   canvas_.setTextDatum(TL_DATUM);
   canvas_.setTextColor(TFT_CYAN, TFT_BLACK);
+  canvas_.setTextSize(large ? 2 : 1);
   canvas_.drawString("DIAGNOSTIIKKA", 4, 2, 2);
   canvas_.setTextColor(textColor_, TFT_BLACK);
+  canvas_.setTextSize(scale);
   std::snprintf(line, sizeof(line), "L:%u U:%u D:%u R:%u P:%u",
                 model.buttonPressed[0], model.buttonPressed[1],
                 model.buttonPressed[2], model.buttonPressed[3],
                 model.buttonPressed[5]);
-  canvas_.drawString(line, 4, 20, 1);
+  canvas_.drawString(line, 4, y, 1);
+  y += lineHeight;
   std::snprintf(line, sizeof(line), "LAST %u/%u  STATE %u",
                 model.lastButtonId, model.lastButtonEventType,
                 static_cast<unsigned>(model.currentScreen));
-  canvas_.drawString(line, 4, 34, 1);
+  canvas_.drawString(line, 4, y, 1);
+  y += lineHeight;
   std::snprintf(line, sizeof(line), "PULSSIT %" PRIu64 "  T1 %" PRIu64,
                 model.totalPulseCount, model.trip1PulseCount);
-  canvas_.drawString(line, 4, 48, 1);
+  canvas_.drawString(line, 4, y, 1);
+  y += lineHeight;
   std::snprintf(line, sizeof(line), "AT:%u T2:%u REV:%u P/A:%u/%u",
                 model.buttonPressed[6], model.buttonPressed[7],
                 model.reverseActive, model.lastPointEventType,
                 model.lastAtEventType);
-  canvas_.drawString(line, 4, 62, 1);
+  canvas_.drawString(line, 4, y, 1);
+  y += lineHeight;
   std::snprintf(line, sizeof(line), "T1 %" PRId64 " mm", model.trip1DistanceMillimeters);
-  canvas_.drawString(line, 4, 76, 1);
+  canvas_.drawString(line, 4, y, 1);
+  y += lineHeight;
   std::snprintf(line, sizeof(line), "T2 %" PRId64 " mm", model.trip2DistanceMillimeters);
-  canvas_.drawString(line, 4, 90, 1);
+  canvas_.drawString(line, 4, y, 1);
+  y += lineHeight;
   std::snprintf(line, sizeof(line), "K %lu  V %.1f km/h",
                 static_cast<unsigned long>(model.millimetersPerPulse),
                 model.speedKmh);
-  canvas_.drawString(line, 4, 104, 1);
+  canvas_.drawString(line, 4, y, 1);
+  y += lineHeight;
   std::snprintf(line, sizeof(line), "PULSSI-IKA %lu ms  ZERO %u",
                 static_cast<unsigned long>(model.lastPulseAgeMilliseconds),
                 model.speedZeroTimedOut);
-  canvas_.drawString(line, 4, 118, 1);
+  canvas_.drawString(line, 4, y, 1);
+  y += lineHeight;
   std::snprintf(line, sizeof(line), "KELLO %02u:%02u:%02u  SET %u",
                 model.clock.hour, model.clock.minute, model.clock.second,
                 model.clockSet);
-  canvas_.drawString(line, 4, 132, 1);
+  canvas_.drawString(line, 4, y, 1);
+  y += lineHeight;
   std::snprintf(line, sizeof(line), "KULUNUT %" PRIu64 " ms",
                 model.clockElapsedMilliseconds);
-  canvas_.drawString(line, 4, 146, 1);
+  canvas_.drawString(line, 4, y, 1);
   canvas_.setTextDatum(BR_DATUM);
-  canvas_.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
-  canvas_.drawString("VASEN PALAA", 316, 168, 1);
+  canvas_.setTextSize(scale);
+  canvas_.setTextColor(textColor_, TFT_BLACK);
+  canvas_.drawString("VASEN PALAA", BoardConfig::DISPLAY_WIDTH - 4,
+                     BoardConfig::DISPLAY_HEIGHT - 2, 1);
 }
 
 }  // namespace ui

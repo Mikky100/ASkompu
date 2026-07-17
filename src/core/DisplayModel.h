@@ -135,7 +135,7 @@ struct CompetitionDisplayModel {
   bool undoPromptVisible;
 };
 
-constexpr uint8_t MENU_VISIBLE_ROWS = 5;
+constexpr uint8_t MENU_VISIBLE_ROWS = 3;
 
 struct MenuRowDisplayModel {
   const char* label;

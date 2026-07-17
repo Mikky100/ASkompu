@@ -42,8 +42,9 @@ normal non-blocking loop.
 
 After time acceptance the basic view shows:
 
-- Trip 1, `HH:MM:SS`, and Trip 2 in three fixed top-row regions, using the same
-  visual size and selected text color;
+- Trip 1 and `HH:MM:SS` in two large fixed top-row regions, using the same
+  visual size and selected text color; Trip 2 remains available to the domain,
+  diagnostics and reset input but is hidden from the basic view;
 - while a competition is active, current segment, right-aligned delta, and next
   segment in fixed left/centre/right regions;
 - optional rounded debug speed with `km/h` in its own bottom region.
@@ -54,9 +55,16 @@ appears only when enabled through `JARJESTELMA > DEBUG > NOPEUS`.
 
 The wiki defines Up/Down, not Right, as the way to open the main menu from the
 drive/basic view. Down opens at the first item and Up at the last item. The main
-menu wraps; submenus clamp at their ends. Left returns, Right opens or accepts,
+menu shows three larger rows at a time and wraps; submenus clamp at their ends.
+Left returns, Right opens or accepts,
 and a long Left abandons the current non-startup UI operation and returns to the
 basic view.
+
+Button edges are captured by interrupts with 20 ms debounce. A dispatched UI
+event requests an immediate redraw instead of waiting for the periodic display
+refresh. After the finish time and total points are shown, Left or Right returns
+to the normal basic view; the completed competition and its results remain
+available through the results menu.
 
 ## Menu tree
 
@@ -143,8 +151,10 @@ import adapter.
 - `src/domain/` contains calculation, saturation, trip, speed and calibration
   primitives plus scoring, event/result models and the RAM event repository.
 - `src/input/` adapts active-low buttons, the reverse level, and
-  interrupt-driven pulses. `ButtonInterpreter` and the 20 ms continuous-level
-  `StableSignalFilter` are native-testable.
+  interrupt-driven pulses. Button CHANGE interrupts timestamp edges into small
+  per-button queues; debounce, short/long-press interpretation and application
+  calls stay outside the ISR. `ButtonInterpreter` and the 20 ms
+  continuous-level `StableSignalFilter` are native-testable.
 - `src/ports/ArduinoClock.h` is the `millis()`/`micros()` adapter.
 - `include/board/` selects one GPIO/display profile from the PlatformIO build
   definition. Missing or conflicting profile definitions stop compilation.
@@ -155,7 +165,10 @@ import adapter.
   controller initialization, backlight and sprite rendering, while
   `DisplayLayout.*` provides native-testable 320x170 and 480x320 geometry.
   The ILI9488 sprite requests PSRAM and handles allocation failure without
-  dereferencing a null buffer.
+  dereferencing a null buffer. The 480x320 profile uses cropped sprite pushes:
+  unchanged periodic frames produce no SPI transfer, basic-view fields update
+  independently, and an unchanged menu page moves only its narrow selection
+  marker. The external ILI9488 SPI clock is 40 MHz.
 - `src/main.cpp` wires the adapters and keeps pulse, button, speed, clock, save,
   and display work non-blocking.
 
@@ -341,7 +354,7 @@ start point. Trip 2 is never reset by JAT automation.
    pressed on the minute field; accept `0:00`, `7:05`, `12:30`, and `23:59`.
 2. Confirm acceptance starts at exactly `H:MM:00`, the clock advances, and a
    power cycle asks again rather than restoring time from NVS.
-3. Inspect the basic view for equal-size Trip 1, clock and Trip 2 values; confirm
+3. Inspect the basic view for equal-size Trip 1 and clock values with Trip 2 hidden; confirm
    speed is absent by default and no MENU, DEV, GPIO, button, total-pulse,
    calibration, or debug text appears.
 4. Confirm Down opens the first wiki menu item, Up opens the last, the main menu

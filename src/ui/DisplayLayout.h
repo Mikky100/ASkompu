@@ -24,7 +24,6 @@ struct DisplayLayout {
   uint16_t height;
   WidgetRect trip1;
   WidgetRect clock;
-  WidgetRect trip2;
   WidgetRect currentSegment;
   WidgetRect delta;
   WidgetRect nextSegment;

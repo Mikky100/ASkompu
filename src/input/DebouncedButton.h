@@ -22,11 +22,25 @@ class DebouncedButton {
   bool consumeRepeatEvent();
 
  private:
+  struct EdgeEvent {
+    uint32_t atMs;
+    bool pressed;
+  };
+
+  static constexpr uint8_t EDGE_QUEUE_SIZE = 16;
+  static void ARDUINO_ISR_ATTR handleInterrupt(void* argument);
+  bool popEdge(EdgeEvent& event);
+  void recordTransitions(const ButtonTransitions& transitions);
   bool readPressed() const;
 
   const uint8_t pin_;
   const uint8_t activeLevel_;
   ButtonInterpreter interpreter_;
+  volatile EdgeEvent edgeQueue_[EDGE_QUEUE_SIZE]{};
+  volatile uint8_t edgeWriteIndex_ = 0;
+  volatile uint8_t edgeReadIndex_ = 0;
+  volatile bool edgeOverflow_ = false;
+  bool lastRawPressed_ = false;
   bool stablePressed_ = false;
   bool pressedEventPending_ = false;
   bool releasedEventPending_ = false;

@@ -688,6 +688,12 @@ void ApplicationCore::handleBasicView(const ButtonEvent& event) {
   if (event.eventType != ButtonEventType::Press) {
     return;
   }
+  if (competition_.state() == domain::CompetitionState::FINISHED &&
+      (event.buttonId == ButtonId::Left ||
+       event.buttonId == ButtonId::Right)) {
+    finishResultDismissed_ = true;
+    return;
+  }
   if (event.buttonId == ButtonId::Down) {
     openMainMenu(0);
   } else if (event.buttonId == ButtonId::Up) {
@@ -1052,7 +1058,7 @@ DisplayModel ApplicationCore::displayModel() const {
                      competitionSettings_.atDisplayDistanceM};
   model.jatResult = {competition_.arrivalClockTime(),
                      competition_.finalDeltaMs() / 1000};
-  model.finishResult.visible =
+  model.finishResult.visible = !finishResultDismissed_ &&
       competition_.state() == domain::CompetitionState::FINISHED &&
       !competition_.stageResults().empty();
   model.finishResult.totalPoints = competition_.totalPoints();
@@ -1101,7 +1107,9 @@ DisplayModel ApplicationCore::displayModel() const {
   model.orderAccess.selectedAction = orderAccessAction_;
   model.order.hasSelectedSegment = false;
   model.order.showsStartTime = false;
-  model.competition.state = competition_.state();
+  model.competition.state =
+      finishResultDismissed_ ? domain::CompetitionState::IDLE
+                             : competition_.state();
   model.competition.deltaSeconds = competition_.deltaSeconds();
   model.competition.deltaFrozen = competition_.deltaFrozen();
   model.competition.undoPromptVisible = competition_.hasUndoPrompt(
@@ -1328,6 +1336,7 @@ void ApplicationCore::activateCurrentRouteOrder() {
       1000UL;
   if (competition_.activate(currentRouteOrder_, millisecondsOfDay,
                             clock_.elapsedSinceSetMilliseconds())) {
+    finishResultDismissed_ = false;
     domain::EventRecord accepted =
         makeEvent(domain::DomainEventType::START_TIME_ACCEPTED);
     accepted.payload.acceptedStartClockTime =

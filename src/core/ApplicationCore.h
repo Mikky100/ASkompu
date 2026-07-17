@@ -138,6 +138,7 @@ class ApplicationCore {
   bool loadedRouteOrderActive_ = false;
   bool routeOrderCompletionPending_ = false;
   bool routeOrderCompletionInFlight_ = false;
+  bool finishResultDismissed_ = false;
   domain::RouteOrder currentRouteOrder_;
   route::RouteOrderEditor routeOrderEditor_;
   OrderAccessAction orderAccessAction_ = OrderAccessAction::Edit;
