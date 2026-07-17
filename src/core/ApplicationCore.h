@@ -21,6 +21,7 @@ enum class MenuPage : uint8_t {
   TextColor,
   Trips,
   System,
+  Debug,
 };
 
 class ApplicationCore {
@@ -48,6 +49,11 @@ class ApplicationCore {
   void setCompetitionSettings(const domain::CompetitionSettings& settings);
   bool takeTextColorSaveRequest(domain::TextColor& color);
   void completeTextColorSave(bool succeeded);
+  void setInitialDebugDisplaySettings(
+      const domain::DebugDisplaySettings& settings);
+  bool takeDebugDisplaySettingsSaveRequest(
+      domain::DebugDisplaySettings& settings);
+  void completeDebugDisplaySettingsSave(bool succeeded);
   bool hasRouteOrder() const { return hasRouteOrder_; }
   const domain::RouteOrder* currentRouteOrder() const {
     return hasRouteOrder_ ? &currentRouteOrder_ : nullptr;
@@ -112,6 +118,10 @@ class ApplicationCore {
   domain::TextColor editedTextColor_ = domain::TextColor::WHITE;
   bool textColorSavePending_ = false;
   bool textColorSaveInFlight_ = false;
+  domain::DebugDisplaySettings debugDisplaySettings_{};
+  domain::DebugDisplaySettings editedDebugDisplaySettings_{};
+  bool debugDisplaySavePending_ = false;
+  bool debugDisplaySaveInFlight_ = false;
   int64_t trip1DistanceMm_ = 0;
   int64_t trip2DistanceMm_ = 0;
   uint64_t totalPulseCount_ = 0;

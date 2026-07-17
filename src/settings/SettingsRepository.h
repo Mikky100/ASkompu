@@ -22,6 +22,11 @@ struct CompetitionSettingsLoadResult {
   bool usedDefault;
 };
 
+struct DebugDisplaySettingsLoadResult {
+  domain::DebugDisplaySettings settings;
+  bool usedDefault;
+};
+
 class SettingsRepository {
  public:
   CalibrationLoadResult loadCalibration() const;
@@ -31,6 +36,9 @@ class SettingsRepository {
   CompetitionSettingsLoadResult loadCompetitionSettings() const;
   bool saveCompetitionSettings(
       const domain::CompetitionSettings& settings) const;
+  DebugDisplaySettingsLoadResult loadDebugDisplaySettings() const;
+  bool saveDebugDisplaySettings(
+      const domain::DebugDisplaySettings& settings) const;
 };
 
 }  // namespace settings

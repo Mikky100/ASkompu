@@ -46,6 +46,16 @@ input::DebouncedButton atButton(BoardConfig::PIN_BUTTON_AT,
 input::DebouncedButton trip2ResetButton(BoardConfig::PIN_BUTTON_TRIP2_RESET,
                                         BoardConfig::BUTTON_PRESSED_LEVEL,
                                         DEBOUNCE_MS);
+#ifdef ASKOMPU_HAS_TRIP1_RESET_PIN
+input::DebouncedButton trip1ResetButton(BoardConfig::PIN_BUTTON_TRIP1_RESET,
+                                        BoardConfig::BUTTON_PRESSED_LEVEL,
+                                        DEBOUNCE_MS);
+#endif
+#ifdef ASKOMPU_HAS_FOOT_RESET_PIN
+input::DebouncedButton footResetButton(BoardConfig::PIN_BUTTON_FOOT_RESET,
+                                       BoardConfig::BUTTON_PRESSED_LEVEL,
+                                       DEBOUNCE_MS);
+#endif
 input::StableSignalFilter reverseFilter(REVERSE_STABILITY_MS);
 input::PulseInput pulseInput(BoardConfig::PIN_PULSE_INPUT,
                              BoardConfig::PULSE_INPUT_MODE,
@@ -106,6 +116,8 @@ void setup() {
   application.setInitialTextColor(textColor.color);
   application.setCompetitionSettings(
       settingsRepository.loadCompetitionSettings().settings);
+  application.setInitialDebugDisplaySettings(
+      settingsRepository.loadDebugDisplaySettings().settings);
   Serial.printf("Calibration: %lu mm/pulse%s\n",
                 static_cast<unsigned long>(calibration.millimetersPerPulse),
                 calibration.usedDefault ? " (default)" : " (NVS)");
@@ -125,6 +137,12 @@ void setup() {
   pointButton.begin();
   atButton.begin();
   trip2ResetButton.begin();
+#ifdef ASKOMPU_HAS_TRIP1_RESET_PIN
+  trip1ResetButton.begin();
+#endif
+#ifdef ASKOMPU_HAS_FOOT_RESET_PIN
+  footResetButton.begin();
+#endif
   pinMode(BoardConfig::PIN_REVERSE_INPUT, BoardConfig::REVERSE_INPUT_MODE);
   const uint32_t inputNowMs = clockSource.monotonicMilliseconds();
   reverseFilter.reset(
@@ -134,7 +152,17 @@ void setup() {
   application.handleReverseSignal({reverseFilter.active(), inputNowMs});
   pulseInput.begin();
 
-  view.begin();
+  const bool displayReady = view.begin();
+#if defined(TFT_BL) && defined(TFT_BACKLIGHT_ON)
+  Serial.printf("Display: buffer=%s, backlight GPIO%u=%s (read=%u)\n",
+                displayReady ? "ok" : "failed",
+                static_cast<unsigned>(TFT_BL),
+                TFT_BACKLIGHT_ON == HIGH ? "active HIGH" : "active LOW",
+                static_cast<unsigned>(digitalRead(TFT_BL)));
+#else
+  Serial.printf("Display: buffer=%s, no backlight GPIO\n",
+                displayReady ? "ok" : "failed");
+#endif
   view.render(application.displayModel());
 }
 
@@ -148,6 +176,12 @@ void loop() {
   pointButton.update(nowMs);
   atButton.update(nowMs);
   trip2ResetButton.update(nowMs);
+#ifdef ASKOMPU_HAS_TRIP1_RESET_PIN
+  trip1ResetButton.update(nowMs);
+#endif
+#ifdef ASKOMPU_HAS_FOOT_RESET_PIN
+  footResetButton.update(nowMs);
+#endif
 
   const bool rawReverse =
       digitalRead(BoardConfig::PIN_REVERSE_INPUT) ==
@@ -165,9 +199,16 @@ void loop() {
   dispatchPointButton(nowMs);
   dispatchButton(atButton, core::ButtonId::At, nowMs);
   dispatchButton(trip2ResetButton, core::ButtonId::Trip2Reset, nowMs);
+#ifdef ASKOMPU_HAS_TRIP1_RESET_PIN
+  dispatchButton(trip1ResetButton, core::ButtonId::Trip1Reset, nowMs);
+#endif
+#ifdef ASKOMPU_HAS_FOOT_RESET_PIN
+  dispatchButton(footResetButton, core::ButtonId::FootReset, nowMs);
+#endif
 
   if (pulseSnapshot.pendingPulses > 0) {
-    Serial.printf("GPIO16 pulses: %lu, total: %lu\n",
+    Serial.printf("GPIO%u pulses: %lu, total: %lu\n",
+                  static_cast<unsigned>(BoardConfig::PIN_PULSE_INPUT),
                   static_cast<unsigned long>(pulseSnapshot.pendingPulses),
                   static_cast<unsigned long>(pulseSnapshot.totalPulses));
   }
@@ -193,6 +234,12 @@ void loop() {
         settingsRepository.saveTextColor(textColorToSave));
   }
 
+  domain::DebugDisplaySettings debugSettingsToSave;
+  if (application.takeDebugDisplaySettingsSaveRequest(debugSettingsToSave)) {
+    application.completeDebugDisplaySettingsSave(
+        settingsRepository.saveDebugDisplaySettings(debugSettingsToSave));
+  }
+
   const domain::RouteOrder* orderToSave = nullptr;
   if (application.takeRouteOrderSaveRequest(orderToSave)) {
     const bool saved = orderToSave && routeOrderStore.replace(*orderToSave);
@@ -206,7 +253,7 @@ void loop() {
   const core::DisplayModel displayModel = application.displayModel();
   const bool screenChanged = displayModel.screen != renderedScreen;
   if (screenChanged ||
-      nowMs - lastDisplayUpdateMs >= DemoConfig::displayUpdateIntervalMs) {
+      nowMs - lastDisplayUpdateMs >= BoardConfig::DISPLAY_UPDATE_INTERVAL_MS) {
     view.render(displayModel);
     renderedScreen = displayModel.screen;
     lastDisplayUpdateMs = nowMs;

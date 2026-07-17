@@ -16,6 +16,7 @@ constexpr char LATE_FACTOR_KEY[] = "lateFactor";
 constexpr char EARLY_FACTOR_KEY[] = "earlyFactor";
 constexpr char JAT_RESULT_SECONDS_KEY[] = "jatResultSec";
 constexpr char AT_DISPLAY_DISTANCE_KEY[] = "atDistanceM";
+constexpr char DEBUG_DISPLAY_ELEMENTS_KEY[] = "debugDisplay";
 
 }  // namespace
 
@@ -156,6 +157,50 @@ bool SettingsRepository::saveCompetitionSettings(
                 validated.atDisplayDistanceM)
     ok = preferences.putUChar(AT_DISPLAY_DISTANCE_KEY,
                               validated.atDisplayDistanceM) == sizeof(uint8_t);
+  preferences.end();
+  return ok;
+}
+
+DebugDisplaySettingsLoadResult SettingsRepository::loadDebugDisplaySettings()
+    const {
+  Preferences preferences;
+  if (!preferences.begin(PREFERENCES_NAMESPACE, true))
+    return {domain::DebugDisplaySettings{}, true};
+  const uint16_t schemaVersion = preferences.getUShort(SCHEMA_VERSION_KEY, 0);
+  const uint16_t stored =
+      preferences.getUShort(DEBUG_DISPLAY_ELEMENTS_KEY, 0);
+  preferences.end();
+  domain::DebugDisplaySettings raw{stored};
+  const domain::DebugDisplaySettings validated =
+      domain::validatedDebugDisplaySettings(raw);
+  const bool validSchema =
+      schemaVersion == CalibrationConfig::SETTINGS_SCHEMA_VERSION;
+  return {validSchema ? validated : domain::DebugDisplaySettings{},
+          !validSchema || validated.enabledElements != raw.enabledElements};
+}
+
+bool SettingsRepository::saveDebugDisplaySettings(
+    const domain::DebugDisplaySettings& settings) const {
+  const domain::DebugDisplaySettings validated =
+      domain::validatedDebugDisplaySettings(settings);
+  if (validated.enabledElements != settings.enabledElements) return false;
+  Preferences preferences;
+  if (!preferences.begin(PREFERENCES_NAMESPACE, false)) return false;
+  const bool alreadyStored =
+      preferences.getUShort(SCHEMA_VERSION_KEY, 0) ==
+          CalibrationConfig::SETTINGS_SCHEMA_VERSION &&
+      preferences.getUShort(DEBUG_DISPLAY_ELEMENTS_KEY, 0) ==
+          validated.enabledElements;
+  if (alreadyStored) {
+    preferences.end();
+    return true;
+  }
+  bool ok = preferences.putUShort(SCHEMA_VERSION_KEY,
+                                  CalibrationConfig::SETTINGS_SCHEMA_VERSION) ==
+            sizeof(uint16_t);
+  if (ok)
+    ok = preferences.putUShort(DEBUG_DISPLAY_ELEMENTS_KEY,
+                               validated.enabledElements) == sizeof(uint16_t);
   preferences.end();
   return ok;
 }

@@ -4,14 +4,18 @@
 #include <TFT_eSPI.h>
 
 #include "core/DisplayModel.h"
+#include "DisplayPort.h"
 
 namespace ui {
 
-class DisplayView {
+class DisplayView : public DisplayPort {
  public:
   DisplayView();
-  void begin();
-  void render(const core::DisplayModel& model);
+  bool begin() override;
+  void setBacklight(bool enabled) override;
+  uint16_t width() const override;
+  uint16_t height() const override;
+  void render(const core::DisplayModel& model) override;
 
  private:
   void showBasicView(const core::DisplayModel& model);
@@ -32,6 +36,7 @@ class DisplayView {
   TFT_eSPI display_;
   TFT_eSprite canvas_;
   uint16_t textColor_ = TFT_WHITE;
+  bool spriteReady_ = false;
 };
 
 }  // namespace ui

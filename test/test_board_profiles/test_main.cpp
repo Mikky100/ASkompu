@@ -1,0 +1,76 @@
+#include <unity.h>
+
+#include "BoardConfig.h"
+#include "board/Esp32S3Ili9488Pins.h"
+
+void setUp() {}
+void tearDown() {}
+
+namespace {
+
+void testIli9488DisplayUsesGpio9Through14() {
+  TEST_ASSERT_EQUAL_UINT8(9, Esp32S3Ili9488Pins::DISPLAY_BACKLIGHT);
+  TEST_ASSERT_EQUAL_UINT8(10, Esp32S3Ili9488Pins::DISPLAY_SCLK);
+  TEST_ASSERT_EQUAL_UINT8(11, Esp32S3Ili9488Pins::DISPLAY_MOSI);
+  TEST_ASSERT_EQUAL_UINT8(12, Esp32S3Ili9488Pins::DISPLAY_DC);
+  TEST_ASSERT_EQUAL_UINT8(13, Esp32S3Ili9488Pins::DISPLAY_RESET);
+  TEST_ASSERT_EQUAL_UINT8(14, Esp32S3Ili9488Pins::DISPLAY_CS);
+}
+
+void testIli9488BacklightIsActiveHighAndMisoUnused() {
+  TEST_ASSERT_TRUE(Esp32S3Ili9488Pins::DISPLAY_BACKLIGHT_ACTIVE_HIGH);
+  TEST_ASSERT_EQUAL_INT8(-1, Esp32S3Ili9488Pins::DISPLAY_MISO);
+  TEST_ASSERT_EQUAL_INT(1, TFT_BACKLIGHT_ON);
+}
+
+void testIli9488MotionInputsUseNewPins() {
+  TEST_ASSERT_EQUAL_UINT8(19, Esp32S3Ili9488Pins::PULSE_INPUT);
+  TEST_ASSERT_EQUAL_UINT8(20, Esp32S3Ili9488Pins::REVERSE_INPUT);
+  TEST_ASSERT_EQUAL_UINT8(21, Esp32S3Ili9488Pins::BUTTON_FOOT_RESET);
+}
+
+void testIli9488NativeUsbIsDisabledAndUart0IsUnchanged() {
+  TEST_ASSERT_FALSE(Esp32S3Ili9488Pins::NATIVE_USB_ENABLED);
+  TEST_ASSERT_EQUAL_UINT8(43, Esp32S3Ili9488Pins::UART0_TX);
+  TEST_ASSERT_EQUAL_UINT8(44, Esp32S3Ili9488Pins::UART0_RX);
+}
+
+void testIli9488GpioAssignmentsAreUnique() {
+  TEST_ASSERT_EQUAL_UINT8(19,
+      Esp32S3Ili9488Pins::bitCount(Esp32S3Ili9488Pins::USED_GPIO_MASK));
+}
+
+void testReleasedAndOctalPsramPinsRemainUnused() {
+  TEST_ASSERT_EQUAL_UINT64(
+      0, Esp32S3Ili9488Pins::USED_GPIO_MASK &
+             Esp32S3Ili9488Pins::RELEASED_GPIO_MASK);
+  TEST_ASSERT_EQUAL_UINT64(
+      0, Esp32S3Ili9488Pins::USED_GPIO_MASK &
+             Esp32S3Ili9488Pins::OCTAL_PSRAM_RESERVED_GPIO_MASK);
+}
+
+void testLilygoProfileRemainsUnchanged() {
+  TEST_ASSERT_EQUAL_UINT8(1, BoardConfig::PIN_BUTTON_LEFT);
+  TEST_ASSERT_EQUAL_UINT8(2, BoardConfig::PIN_BUTTON_UP);
+  TEST_ASSERT_EQUAL_UINT8(3, BoardConfig::PIN_BUTTON_DOWN);
+  TEST_ASSERT_EQUAL_UINT8(10, BoardConfig::PIN_BUTTON_RIGHT);
+  TEST_ASSERT_EQUAL_UINT8(11, BoardConfig::PIN_BUTTON_TRIP2_RESET);
+  TEST_ASSERT_EQUAL_UINT8(12, BoardConfig::PIN_BUTTON_AT);
+  TEST_ASSERT_EQUAL_UINT8(13, BoardConfig::PIN_REVERSE_INPUT);
+  TEST_ASSERT_EQUAL_UINT8(14, BoardConfig::PIN_BUTTON_POINT);
+  TEST_ASSERT_EQUAL_UINT8(16, BoardConfig::PIN_PULSE_INPUT);
+}
+
+}  // namespace
+
+int main(int, char**) {
+  UNITY_BEGIN();
+  RUN_TEST(testIli9488DisplayUsesGpio9Through14);
+  RUN_TEST(testIli9488BacklightIsActiveHighAndMisoUnused);
+  RUN_TEST(testIli9488MotionInputsUseNewPins);
+  RUN_TEST(testIli9488NativeUsbIsDisabledAndUart0IsUnchanged);
+  RUN_TEST(testIli9488GpioAssignmentsAreUnique);
+  RUN_TEST(testReleasedAndOctalPsramPinsRemainUnused);
+  RUN_TEST(testLilygoProfileRemainsUnchanged);
+  return UNITY_END();
+}

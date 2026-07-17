@@ -65,8 +65,10 @@ constexpr MenuItem TRIP_ITEMS[] = {{"NOLLAA TRIP 1", true},
                                    {"NOLLAA TRIP 2", true},
                                    {"ULKOINEN TRIP", false}};
 constexpr MenuItem SYSTEM_ITEMS[] = {{"DIAGNOSTIIKKA", true},
+                                     {"DEBUG", true},
                                      {"PAINIKEASETUKSET", false},
                                      {"MUUT ASETUKSET", false}};
+constexpr MenuItem DEBUG_ITEMS[] = {{"NOPEUS", true}};
 
 template <std::size_t N>
 uint8_t countOf(const MenuItem (&)[N]) {
@@ -99,6 +101,10 @@ const MenuItem* itemsFor(MenuPage page, uint8_t& count, const char*& title) {
       title = "JARJESTELMA";
       count = countOf(SYSTEM_ITEMS);
       return SYSTEM_ITEMS;
+    case MenuPage::Debug:
+      title = "DEBUG";
+      count = countOf(DEBUG_ITEMS);
+      return DEBUG_ITEMS;
   }
   title = "";
   count = 0;
@@ -721,6 +727,9 @@ void ApplicationCore::handleMenu(const ButtonEvent& event) {
       screen_ = Screen::BasicView;
     } else if (menuPage_ == MenuPage::TextColor) {
       openSubmenu(MenuPage::Display);
+    } else if (menuPage_ == MenuPage::Debug) {
+      openSubmenu(MenuPage::System);
+      menuSelectedIndex_ = 1;
     } else {
       openMainMenu(mainMenuSelectedIndex_);
     }
@@ -885,6 +894,15 @@ void ApplicationCore::activateMenuItem() {
     }
   } else if (menuPage_ == MenuPage::System && menuSelectedIndex_ == 0) {
     screen_ = Screen::Diagnostics;
+  } else if (menuPage_ == MenuPage::System && menuSelectedIndex_ == 1) {
+    openSubmenu(MenuPage::Debug);
+  } else if (menuPage_ == MenuPage::Debug && menuSelectedIndex_ == 0) {
+    editedDebugDisplaySettings_ = debugDisplaySettings_;
+    editedDebugDisplaySettings_.enabledElements ^=
+        static_cast<uint16_t>(domain::DebugDisplayElement::SPEED);
+    debugDisplaySavePending_ =
+        editedDebugDisplaySettings_.enabledElements !=
+        debugDisplaySettings_.enabledElements;
   }
 }
 
@@ -1015,6 +1033,8 @@ DisplayModel ApplicationCore::displayModel() const {
   model.textColor = textColor_;
   model.clock = clock_.isSet() ? clock_.now() : ClockTime{0, 0, 0};
   model.speedKmh = speedCalculator_.speedKmh();
+  model.showSpeed = debugDisplaySettings_.enabled(
+      domain::DebugDisplayElement::SPEED);
   model.trip1 = {trip1DistanceMm_, true};
   model.trip2 = {trip2DistanceMm_, true};
   model.timeEntry = {editedHour_, editedMinute_, activeTimeField_,
@@ -1124,6 +1144,12 @@ DisplayModel ApplicationCore::displayModel() const {
     for (uint8_t index = 0; index < model.menu.visibleRowCount; ++index) {
       const MenuItem& item = items[menuScrollOffset_ + index];
       model.menu.rows[index] = {item.label, item.enabled};
+      if (menuPage_ == MenuPage::Debug && menuScrollOffset_ + index == 0) {
+        model.menu.rows[index].label =
+            debugDisplaySettings_.enabled(domain::DebugDisplayElement::SPEED)
+                ? "NOPEUS: PAALLA"
+                : "NOPEUS: POIS";
+      }
     }
   }
 
@@ -1233,6 +1259,32 @@ void ApplicationCore::completeTextColorSave(bool succeeded) {
   openSubmenu(MenuPage::Display);
   menuSelectedIndex_ = 4;
   updateMenuScroll();
+}
+
+void ApplicationCore::setInitialDebugDisplaySettings(
+    const domain::DebugDisplaySettings& settings) {
+  debugDisplaySettings_ = domain::validatedDebugDisplaySettings(settings);
+  editedDebugDisplaySettings_ = debugDisplaySettings_;
+}
+
+bool ApplicationCore::takeDebugDisplaySettingsSaveRequest(
+    domain::DebugDisplaySettings& settings) {
+  if (!debugDisplaySavePending_ || debugDisplaySaveInFlight_ ||
+      editedDebugDisplaySettings_.enabledElements ==
+          debugDisplaySettings_.enabledElements)
+    return false;
+  debugDisplaySavePending_ = false;
+  debugDisplaySaveInFlight_ = true;
+  settings = editedDebugDisplaySettings_;
+  return true;
+}
+
+void ApplicationCore::completeDebugDisplaySettingsSave(bool succeeded) {
+  if (!debugDisplaySaveInFlight_) return;
+  debugDisplaySaveInFlight_ = false;
+  if (succeeded) debugDisplaySettings_ = editedDebugDisplaySettings_;
+  editedDebugDisplaySettings_ = debugDisplaySettings_;
+  openSubmenu(MenuPage::Debug);
 }
 
 void ApplicationCore::setInitialRouteOrder(const domain::RouteOrder& order,

@@ -4,6 +4,7 @@
 #include <cstdio>
 
 #include "BoardConfig.h"
+#include "DisplayLayout.h"
 
 namespace ui {
 namespace {
@@ -33,16 +34,20 @@ void formatDelta(char* text, size_t size, int64_t seconds) {
     std::snprintf(text, size, "%" PRId64, seconds);
 }
 
-void formatSegment(char* text, size_t size,
-                   const domain::SegmentDefinition& segment) {
+void formatSegmentRange(char* text, size_t size,
+                        const domain::SegmentDefinition& segment) {
+  std::snprintf(text, size, "%u-%u", segment.startPointIndex,
+                segment.endPointIndex);
+}
+
+void formatSegmentValue(char* text, size_t size,
+                        const domain::SegmentDefinition& segment) {
   if (segment.segmentType == domain::SegmentType::TIME) {
-    std::snprintf(text, size, "%u-%u %lu:%02lu", segment.startPointIndex,
-                  segment.endPointIndex,
+    std::snprintf(text, size, "%lu:%02lu",
                   static_cast<unsigned long>(segment.value / 60),
                   static_cast<unsigned long>(segment.value % 60));
   } else if (segment.segmentType == domain::SegmentType::SPEED) {
-    std::snprintf(text, size, "%u-%u %lu", segment.startPointIndex,
-                  segment.endPointIndex,
+    std::snprintf(text, size, "%lu",
                   static_cast<unsigned long>(segment.value));
   } else {
     text[0] = '\0';
@@ -105,20 +110,45 @@ const char* eventTypeName(domain::DomainEventType type) {
 
 DisplayView::DisplayView() : canvas_(&display_) {}
 
-void DisplayView::begin() {
-  display_.init();
-  display_.setRotation(1);
-#ifdef TFT_BL
-  pinMode(TFT_BL, OUTPUT);
-  digitalWrite(TFT_BL, TFT_BACKLIGHT_ON);
+bool DisplayView::begin() {
+#ifdef ASKOMPU_BOARD_ILI9488_MAIN
+  // Drive the external module's active-HIGH backlight before initialization.
+  setBacklight(true);
 #endif
+  display_.init();
+  display_.setRotation(BoardConfig::DISPLAY_ROTATION);
+  // Re-assert the configured level after TFT_eSPI initialization as well.
+  setBacklight(true);
   canvas_.setColorDepth(16);
-  canvas_.createSprite(BoardConfig::DISPLAY_WIDTH, BoardConfig::DISPLAY_HEIGHT);
+  if (BoardConfig::USE_PSRAM_SPRITE)
+    canvas_.setAttribute(PSRAM_ENABLE, true);
+  spriteReady_ = canvas_.createSprite(BoardConfig::DISPLAY_WIDTH,
+                                      BoardConfig::DISPLAY_HEIGHT) != nullptr;
+  if (!spriteReady_) {
+    display_.fillScreen(TFT_BLACK);
+    display_.setTextColor(TFT_RED, TFT_BLACK);
+    display_.setTextDatum(MC_DATUM);
+    display_.drawString("DISPLAY BUFFER ERROR", BoardConfig::DISPLAY_WIDTH / 2,
+                        BoardConfig::DISPLAY_HEIGHT / 2, 2);
+    return false;
+  }
   canvas_.fillSprite(TFT_BLACK);
   canvas_.pushSprite(0, 0);
+  return true;
 }
 
+void DisplayView::setBacklight(bool enabled) {
+#if defined(TFT_BL)
+  pinMode(TFT_BL, OUTPUT);
+  digitalWrite(TFT_BL, enabled ? TFT_BACKLIGHT_ON : !TFT_BACKLIGHT_ON);
+#endif
+}
+
+uint16_t DisplayView::width() const { return BoardConfig::DISPLAY_WIDTH; }
+uint16_t DisplayView::height() const { return BoardConfig::DISPLAY_HEIGHT; }
+
 void DisplayView::render(const core::DisplayModel& model) {
+  if (!spriteReady_) return;
   switch (model.textColor) {
     case domain::TextColor::RED:
       textColor_ = TFT_RED;
@@ -380,8 +410,10 @@ void DisplayView::showBasicView(const core::DisplayModel& model) {
   char trip2Text[24];
   char deltaText[24];
   char atText[12];
-  char currentSegment[24]{};
-  char nextSegment[24]{};
+  char currentRange[16]{};
+  char currentValue[16]{};
+  char nextRange[16]{};
+  char nextValue[16]{};
   std::snprintf(clockText, sizeof(clockText), "%02u:%02u:%02u",
                 model.clock.hour, model.clock.minute, model.clock.second);
   std::snprintf(speedText, sizeof(speedText), "%.0f km/h", model.speedKmh);
@@ -391,46 +423,88 @@ void DisplayView::showBasicView(const core::DisplayModel& model) {
   std::snprintf(atText, sizeof(atText), "%02u:%02u:%02u",
                 model.atOverlay.clockTime.hour, model.atOverlay.clockTime.minute,
                 model.atOverlay.clockTime.second);
-  if (model.competition.hasCurrentSegment)
-    formatSegment(currentSegment, sizeof(currentSegment),
-                  model.competition.currentSegment);
-  if (model.competition.hasNextSegment)
-    formatSegment(nextSegment, sizeof(nextSegment), model.competition.nextSegment);
+  if (model.competition.hasCurrentSegment) {
+    formatSegmentRange(currentRange, sizeof(currentRange),
+                       model.competition.currentSegment);
+    formatSegmentValue(currentValue, sizeof(currentValue),
+                       model.competition.currentSegment);
+  }
+  if (model.competition.hasNextSegment) {
+    formatSegmentRange(nextRange, sizeof(nextRange),
+                       model.competition.nextSegment);
+    formatSegmentValue(nextValue, sizeof(nextValue),
+                       model.competition.nextSegment);
+  }
 
-  canvas_.setTextDatum(TL_DATUM);
-  canvas_.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
-  canvas_.drawString(clockText, 8, 7, 2);
-  canvas_.setTextDatum(TR_DATUM);
-  canvas_.drawString(speedText, BoardConfig::DISPLAY_WIDTH - 8, 7, 2);
+  const DisplayLayout layout =
+      layoutFor(BoardConfig::DISPLAY_WIDTH, BoardConfig::DISPLAY_HEIGHT);
+  const auto centerX = [](const WidgetRect& rect) {
+    return static_cast<int16_t>(rect.x + rect.width / 2);
+  };
+  const auto centerY = [](const WidgetRect& rect) {
+    return static_cast<int16_t>(rect.y + rect.height / 2);
+  };
 
   canvas_.setTextDatum(TL_DATUM);
   canvas_.setTextColor(TFT_DARKGREY, TFT_BLACK);
-  canvas_.drawString("1", 8, 42, 2);
-  canvas_.setTextColor(textColor_, TFT_BLACK);
-  canvas_.setTextSize(2);
-  canvas_.drawString(trip1Text, 20, 48, 2);
   canvas_.setTextSize(1);
-  canvas_.setTextDatum(BL_DATUM);
-  canvas_.setTextColor(TFT_DARKGREY, TFT_BLACK);
-  canvas_.drawString("2", 8, 162, 2);
+  canvas_.drawString("1", layout.trip1.x, layout.trip1.y, 1);
+  canvas_.drawString("2", layout.trip2.x, layout.trip2.y, 1);
+
+  canvas_.setTextDatum(MC_DATUM);
   canvas_.setTextColor(textColor_, TFT_BLACK);
-  canvas_.drawString(trip2Text, 20, 162, 2);
+  canvas_.setTextSize(layout.topFont.value);
+  canvas_.drawString(trip1Text, centerX(layout.trip1), centerY(layout.trip1),
+                     layout.topFont.face);
+  canvas_.drawString(trip2Text, centerX(layout.trip2), centerY(layout.trip2),
+                     layout.topFont.face);
+  canvas_.drawString(clockText, centerX(layout.clock), centerY(layout.clock),
+                     layout.topFont.face);
 
   if (model.competition.state != domain::CompetitionState::IDLE) {
     canvas_.setTextDatum(MC_DATUM);
-    canvas_.setTextSize(2);
+    canvas_.setTextSize(layout.deltaFont.value);
     canvas_.setTextColor(model.competition.deltaFrozen ? TFT_YELLOW : textColor_,
                          TFT_BLACK);
-    canvas_.drawString(model.atOverlay.visible ? atText : deltaText, 170, 83, 2);
-    canvas_.setTextSize(1);
-    canvas_.setTextDatum(TR_DATUM);
+    canvas_.drawString(model.atOverlay.visible ? atText : deltaText,
+                       centerX(layout.delta), centerY(layout.delta),
+                       layout.deltaFont.face);
+
+    canvas_.setTextSize(layout.segmentFont.value);
+    canvas_.setTextColor(TFT_CYAN, TFT_BLACK);
+    canvas_.drawString(currentRange, centerX(layout.currentSegment),
+                       layout.currentSegment.y + layout.currentSegment.height / 3,
+                       layout.segmentFont.face);
+    canvas_.drawString(nextRange, centerX(layout.nextSegment),
+                       layout.nextSegment.y + layout.nextSegment.height / 3,
+                       layout.segmentFont.face);
+
+    canvas_.setTextSize(layout.segmentValueFont.value);
     canvas_.setTextColor(textColor_, TFT_BLACK);
-    canvas_.drawString(currentSegment, 312, 48, 4);
+    canvas_.drawString(currentValue, centerX(layout.currentSegment),
+                       layout.currentSegment.y +
+                           (layout.currentSegment.height * 2) / 3,
+                       layout.segmentValueFont.face);
     canvas_.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
-    canvas_.drawString(nextSegment, 312, 82, 2);
-    canvas_.setTextDatum(BC_DATUM);
-    if (model.competition.undoPromptVisible)
-      canvas_.drawString("<- = PERU", 160, 168, 2);
+    canvas_.drawString(nextValue, centerX(layout.nextSegment),
+                       layout.nextSegment.y +
+                           (layout.nextSegment.height * 2) / 3,
+                       layout.segmentValueFont.face);
+  }
+
+  if (model.showSpeed) {
+    canvas_.setTextDatum(ML_DATUM);
+    canvas_.setTextSize(layout.debugFont.value);
+    canvas_.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+    canvas_.drawString(speedText, layout.debugSpeed.x + 4,
+                       centerY(layout.debugSpeed), layout.debugFont.face);
+  }
+  if (model.competition.undoPromptVisible) {
+    canvas_.setTextDatum(MR_DATUM);
+    canvas_.setTextSize(layout.debugFont.value);
+    canvas_.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+    canvas_.drawString("<- = PERU", layout.debugSpeed.right() - 4,
+                       centerY(layout.debugSpeed), layout.debugFont.face);
   }
 }
 

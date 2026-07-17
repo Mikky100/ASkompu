@@ -841,6 +841,19 @@ void testTripResetsAreIndependentAndKeepTotal() {
   TEST_ASSERT_EQUAL_UINT64(11, fixture.application.totalPulseCount());
 }
 
+void testFootResetMatchesTrip1ResetWithoutChangingTrip2() {
+  Fixture fixture;
+  pulse(fixture.application, 7, 600000, 700000, 700000);
+  fixture.application.handleButton(
+      button(core::ButtonId::FootReset, core::ButtonEventType::Press));
+  TEST_ASSERT_EQUAL_UINT64(0, fixture.application.trip1DistanceMillimeters());
+  TEST_ASSERT_EQUAL_UINT64(7000,
+                           fixture.application.trip2DistanceMillimeters());
+  TEST_ASSERT_EQUAL_UINT64(7, fixture.application.totalPulseCount());
+  fixture.application.handleButton(
+      button(core::ButtonId::FootReset, core::ButtonEventType::Release));
+}
+
 void testTripMenuActionsResetNamedTripOnly() {
   Fixture fixture;
   acceptStartupTime(fixture, 0, 0);
@@ -948,6 +961,64 @@ void testButtonDebounceAndLongRepeatSemantics() {
   TEST_ASSERT_FALSE(released.shortPress);
 }
 
+void openDebugMenu(Fixture& fixture) {
+  openMainAt(fixture, 6);
+  press(fixture.application, core::ButtonId::Right);
+  press(fixture.application, core::ButtonId::Down);
+  press(fixture.application, core::ButtonId::Right);
+}
+
+void testDebugSpeedDefaultsOffAndUnknownBitsAreFiltered() {
+  Fixture fixture;
+  acceptStartupTime(fixture, 0, 0);
+  TEST_ASSERT_FALSE(fixture.application.displayModel().showSpeed);
+  fixture.application.setInitialDebugDisplaySettings(
+      domain::DebugDisplaySettings(0xFFFF));
+  TEST_ASSERT_TRUE(fixture.application.displayModel().showSpeed);
+  const domain::DebugDisplaySettings validated =
+      domain::validatedDebugDisplaySettings(
+          domain::DebugDisplaySettings(0xFFFE));
+  TEST_ASSERT_EQUAL_UINT16(0, validated.enabledElements);
+}
+
+void testDebugSpeedCanBeEnabledDisabledAndFailureKeepsOldValue() {
+  Fixture fixture;
+  acceptStartupTime(fixture, 0, 0);
+  openDebugMenu(fixture);
+  TEST_ASSERT_EQUAL_STRING("NOPEUS: POIS",
+                           fixture.application.displayModel().menu.rows[0].label);
+  press(fixture.application, core::ButtonId::Right);
+  domain::DebugDisplaySettings requested;
+  TEST_ASSERT_TRUE(
+      fixture.application.takeDebugDisplaySettingsSaveRequest(requested));
+  TEST_ASSERT_TRUE(requested.enabled(domain::DebugDisplayElement::SPEED));
+  fixture.application.completeDebugDisplaySettingsSave(false);
+  TEST_ASSERT_FALSE(fixture.application.displayModel().showSpeed);
+
+  press(fixture.application, core::ButtonId::Right);
+  TEST_ASSERT_TRUE(
+      fixture.application.takeDebugDisplaySettingsSaveRequest(requested));
+  fixture.application.completeDebugDisplaySettingsSave(true);
+  TEST_ASSERT_TRUE(fixture.application.displayModel().showSpeed);
+  TEST_ASSERT_EQUAL_STRING(
+      "NOPEUS: PAALLA", fixture.application.displayModel().menu.rows[0].label);
+
+  press(fixture.application, core::ButtonId::Right);
+  TEST_ASSERT_TRUE(
+      fixture.application.takeDebugDisplaySettingsSaveRequest(requested));
+  fixture.application.completeDebugDisplaySettingsSave(true);
+  TEST_ASSERT_FALSE(fixture.application.displayModel().showSpeed);
+}
+
+void testUnchangedDebugSettingDoesNotRequestPersistentWrite() {
+  Fixture fixture;
+  domain::DebugDisplaySettings requested;
+  fixture.application.setInitialDebugDisplaySettings(
+      domain::DebugDisplaySettings(0));
+  TEST_ASSERT_FALSE(
+      fixture.application.takeDebugDisplaySettingsSaveRequest(requested));
+}
+
 }  // namespace
 
 int main(int, char**) {
@@ -984,6 +1055,7 @@ int main(int, char**) {
   RUN_TEST(testCalibrationMenuCancelUnchangedAndChangedSave);
   RUN_TEST(testCalibrationSaveFailureStaysInEditor);
   RUN_TEST(testTripResetsAreIndependentAndKeepTotal);
+  RUN_TEST(testFootResetMatchesTrip1ResetWithoutChangingTrip2);
   RUN_TEST(testTripMenuActionsResetNamedTripOnly);
   RUN_TEST(testPulsesAccumulateDuringStartupTimeEntry);
   RUN_TEST(testSparseAndDensePulseSpeeds);
@@ -992,5 +1064,8 @@ int main(int, char**) {
   RUN_TEST(testCalibrationChangeAffectsOnlyFuturePulses);
   RUN_TEST(testDistanceMathAndLongRunSaturate);
   RUN_TEST(testButtonDebounceAndLongRepeatSemantics);
+  RUN_TEST(testDebugSpeedDefaultsOffAndUnknownBitsAreFiltered);
+  RUN_TEST(testDebugSpeedCanBeEnabledDisabledAndFailureKeepsOldValue);
+  RUN_TEST(testUnchangedDebugSettingDoesNotRequestPersistentWrite);
   return UNITY_END();
 }
