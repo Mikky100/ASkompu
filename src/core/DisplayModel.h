@@ -179,6 +179,7 @@ struct DisplayModel {
   domain::TextColor textColor;
   ClockTime clock;
   float speedKmh;
+  bool showSpeed;
   TripDisplayModel trip1;
   TripDisplayModel trip2;
   TimeEntryDisplayModel timeEntry;

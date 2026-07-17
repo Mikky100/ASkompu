@@ -1,7 +1,8 @@
-# ASkompu LilyGO application shell
+# ASkompu multi-board application shell
 
-This branch contains a hardware-independent ASkompu application shell and a
-320x170 LilyGO T-Display S3 adapter. The normative product and interaction
+This branch contains a hardware-independent ASkompu application shell and two
+main-computer display ports: the 320x170 LilyGO T-Display S3 and an ESP32-S3
+N16R8 with a 480x320 ILI9488 SPI display. The normative product and interaction
 specification is the [ASkompu GitHub Wiki](https://github.com/Mikky100/ASkompu/wiki).
 
 ## Competition runtime
@@ -41,15 +42,15 @@ normal non-blocking loop.
 
 After time acceptance the basic view shows:
 
-- clock as `HH:MM:SS`, following the wiki's clock format;
-- Trip 1 as the visually dominant value;
-- Trip 2 at the same time, with a smaller presentation;
-- rounded prototype speed with `km/h`.
+- Trip 1, `HH:MM:SS`, and Trip 2 in three fixed top-row regions, using the same
+  visual size and selected text color;
+- while a competition is active, current segment, right-aligned delta, and next
+  segment in fixed left/centre/right regions;
+- optional rounded debug speed with `km/h` in its own bottom region.
 
 It contains no `MENU` or `DEV` text, menu hint, GPIO numbers, button states,
-total pulse count, pulse age, calibration data, or debug text. The speed value
-is a prototype validation feature and is not a permanent requirement of the
-final competition display.
+total pulse count, pulse age, or calibration data. Debug speed defaults off and
+appears only when enabled through `JARJESTELMA > DEBUG > NOPEUS`.
 
 The wiki defines Up/Down, not Right, as the way to open the main menu from the
 drive/basic view. Down opens at the first item and Up at the last item. The main
@@ -70,7 +71,7 @@ workflow; unavailable unrelated items remain visible but dimmed.
 | Pisteet ja tapahtumat | Jaksojen pisteet, Kokonaispisteet, Tapahtumat | Implemented from the current RAM event/result data |
 | Näyttöasetukset | Näyttöprofiili, Näyttöselitteet, Aikaeron muoto, Trip-tarkkuus, Tekstin väri | Persistent white/red/green text color works; other rows remain unavailable |
 | Tripit | Nollaa Trip 1, Nollaa Trip 2, Ulkoinen trip | Both resets work; external display source needs its hardware/protocol adapter |
-| Järjestelmä | Diagnostiikka, Painikeasetukset, Muut asetukset | Diagnostics works; persistent button/system settings are not implemented |
+| Järjestelmä | Diagnostiikka, Debug, Painikeasetukset, Muut asetukset | Diagnostics and persistent Debug speed work; button/system settings are not implemented |
 
 Calibration editing uses a draft value. Left cancels without changing the
 active value or requesting a write. Right accepts; an unchanged value requests
@@ -145,11 +146,16 @@ import adapter.
   interrupt-driven pulses. `ButtonInterpreter` and the 20 ms continuous-level
   `StableSignalFilter` are native-testable.
 - `src/ports/ArduinoClock.h` is the `millis()`/`micros()` adapter.
+- `include/board/` selects one GPIO/display profile from the PlatformIO build
+  definition. Missing or conflicting profile definitions stop compilation.
 - `src/settings/` is the only Preferences/NVS adapter. It stores calibration,
-  never wall-clock time.
-- `src/ui/` maps DisplayModel values to the LilyGO pixel layout. A screen-sized
-  sprite prevents visible full-screen clearing; rendering remains on the
-  controlled application refresh cadence.
+  text color, competition parameters and the versionable Debug bitmask, never
+  wall-clock time.
+- `src/ui/DisplayPort.h` is the display boundary. `DisplayView` owns TFT_eSPI,
+  controller initialization, backlight and sprite rendering, while
+  `DisplayLayout.*` provides native-testable 320x170 and 480x320 geometry.
+  The ILI9488 sprite requests PSRAM and handles allocation failure without
+  dereferencing a null buffer.
 - `src/main.cpp` wires the adapters and keeps pulse, button, speed, clock, save,
   and display work non-blocking.
 
@@ -170,8 +176,11 @@ platformio run -e native
 Build firmware without uploading it:
 
 ```powershell
-platformio run -e lilygo-t-display-s3
+platformio run -e lilygo-main
+platformio run -e esp32s3-ili9488-main
 ```
+
+`lilygo-t-display-s3` remains as a compatibility alias for `lilygo-main`.
 
 The native tests use a controlled time source and no wall clock, sleeps,
 display, NVS, or board. They cover clock validation/entry/acceptance, restart,
@@ -214,6 +223,95 @@ The same settings repository validates `lateFactor` (default 1), `earlyFactor`
 `atDisplayDistanceM` (1...20, default 10). Writes compare stored values and
 only update changed accepted fields.
 
+Debug display selection is stored as the `debugDisplay` `uint16_t` bitmask.
+The first known bit is speed. Unknown bits are removed on load, an unchanged
+accepted value causes no write, and a failed write leaves the old active value
+in use.
+
+## Board and display profiles
+
+`lilygo-main` retains the verified LilyGO ST7789 8-bit parallel display,
+320x170 logical landscape resolution, display GPIOs and all existing functional
+GPIOs. Its main-computer inputs are Left 1, Up 2, Down 3, Right 10, Trip 2 reset
+11, AT 12, reverse 13, Point 14 and speed pulse 16. This profile has no physical
+Trip 1 or foot-reset input.
+
+`esp32s3-ili9488-main` uses an ESP32-S3 N16R8 manifest with 16 MB QD flash and
+8 MB OPI PSRAM. Its active-low pull-up inputs are:
+
+| Function | GPIO |
+|---|---:|
+| Left / Up / Down / Right | 4 / 5 / 6 / 7 |
+| Point / AT | 15 / 16 |
+| Trip 1 reset / Trip 2 reset | 17 / 18 |
+| Speed pulse / active-low reverse | 19 / 20 |
+| Foot reset | 21 |
+| External trip TX / RX | 47 / 48 (reserved only) |
+
+The ILI9488 cable bundle, starting from the display module's VCC pin, is:
+
+| Wire | TFT signal | ESP32-S3 connection |
+|---|---|---:|
+| orange | VCC | 5V |
+| yellow | GND | GND |
+| green | CS | GPIO14 |
+| blue | RESET | GPIO13 |
+| violet | DC/RS | GPIO12 |
+| grey | SDI/MOSI | GPIO11 |
+| white | SCK | GPIO10 |
+| black | LED | GPIO9 |
+
+The display SDO/MISO pin is not connected. TFT_eSPI uses GPIO0 internally as
+an unconnected dummy MISO to avoid its ESP32-S3 `MISO=-1`/MOSI alias; no wire
+is added to GPIO0. With the ESP32-S3 board antenna at
+the top and USB-C connectors at the bottom, the left-edge order is GPIO9 LED,
+GPIO10 SCK, GPIO11 MOSI, GPIO12 DC/RS, GPIO13 RESET, GPIO14 CS, 5V VCC and GND.
+Only the VCC and GND wires cross relative to the display module pin order.
+
+On the right edge the input order is GPIO21 foot reset, GPIO20 active-low
+reverse, GPIO19 speed pulse, then the shared GND for these three signals. The
+next GND remains unused. Foot reset is active LOW with the internal pull-up and
+performs the same Trip 1 reset operation as the dedicated Trip 1 button.
+GPIO1, GPIO2, GPIO8 and GPIO38 are deliberately left free by this profile;
+GPIO35-37 remain unavailable because of the N16R8 Octal PSRAM.
+
+The touch pins (`T_IRQ`, `T_DO`, `T_DIN`, `T_CS`, `T_CLK`) and all SD-card
+pins are intentionally unused. The controller is selected entirely by the
+PlatformIO profile; a later verified ST7796S module can therefore change driver
+flags without modifying core or layout code.
+
+GPIO19 and GPIO20 are repurposed from native USB D-/D+ for pulse and reverse
+inputs. Consequently this profile disables native USB, USB CDC on boot, USB
+MSC and USB DFU. Use the right-hand USB-C connector, the YD-ESP32-S3 board's
+CH343P USB-UART/COM programming port, for esptool uploads and 115200 baud serial
+diagnostics. UART0 remains on GPIO43 TX and GPIO44 RX. Leave the left-hand
+native USB/OTG connector disconnected; it is not needed for programming or
+diagnostics.
+
+## Physical ILI9488 verification checklist
+
+1. With both USB-C cables disconnected, continuity-check the wire colors,
+   GPIO9-14 order, crossed VCC/GND pair and unconnected SDO/MISO.
+2. Connect only the right-hand CH343P USB-C port, upload over UART0 and confirm
+   boot diagnostics at 115200 baud; leave the native USB/OTG port disconnected.
+3. Confirm the module really contains an ILI9488 and verify 480x320 landscape
+   orientation, RGB order, inversion and full-screen
+   refresh without tearing or a persistent blank screen.
+4. Verify GPIO9 turns the active-HIGH backlight on and that boot does not flash
+   it unexpectedly.
+5. Exercise every top-row value and `-1234`, `0`, `+1234` delta values; confirm
+   fixed positions, no clipping and no overlap at both short and long values.
+6. Verify TIME, SPEED, MITTIS, JAT, AT, finish, result, event, menu and editing
+   views, including a missing next segment.
+7. Toggle `JARJESTELMA > DEBUG > NOPEUS`, reboot, and confirm persistence and
+   that the bottom debug region never covers competition values.
+8. Using the shared adjacent GND, exercise GPIO19 speed pulses, GPIO20 reverse
+   and GPIO21 foot reset; separately verify Trip 1 and Trip 2 reset buttons.
+9. Confirm GPIO1, GPIO2, GPIO8 and GPIO38 remain unused and the left native USB
+   port does not enumerate or participate in normal operation.
+10. Run long enough to detect SPI integrity, PSRAM allocation, thermal or power
+   issues. Touch, SD and the reserved external-trip UART are outside this test.
+
 ## Confirmed LilyGO wiring and missing hardware
 
 | Function | GPIO |
@@ -243,8 +341,9 @@ start point. Trip 2 is never reset by JAT automation.
    pressed on the minute field; accept `0:00`, `7:05`, `12:30`, and `23:59`.
 2. Confirm acceptance starts at exactly `H:MM:00`, the clock advances, and a
    power cycle asks again rather than restoring time from NVS.
-3. Inspect the basic view for clock, dominant Trip 1, Trip 2, and speed; confirm
-   no MENU, DEV, GPIO, button, total-pulse, calibration, or debug text appears.
+3. Inspect the basic view for equal-size Trip 1, clock and Trip 2 values; confirm
+   speed is absent by default and no MENU, DEV, GPIO, button, total-pulse,
+   calibration, or debug text appears.
 4. Confirm Down opens the first wiki menu item, Up opens the last, the main menu
    wraps, long lists scroll, disabled rows cannot be activated, and Left returns.
 5. Edit time from the menu: cancel must preserve it; accept must reset seconds
