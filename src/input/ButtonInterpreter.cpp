@@ -1,6 +1,11 @@
 #include "ButtonInterpreter.h"
 
 namespace input {
+namespace {
+
+constexpr uint32_t MINIMUM_PRESS_INTERVAL_MS = 150;
+
+}  // namespace
 
 ButtonInterpreter::ButtonInterpreter(uint32_t debounceMs,
                                      uint32_t longPressDelayMs,
@@ -16,6 +21,9 @@ void ButtonInterpreter::reset(bool pressed, uint32_t nowMs) {
   rawChangedAtMs_ = nowMs;
   pressedAtMs_ = nowMs;
   nextRepeatAtMs_ = nowMs + longPressDelayMs_;
+  lastAcceptedPressAtMs_ = nowMs;
+  hasAcceptedPress_ = pressed;
+  suppressCurrentPress_ = false;
 }
 
 ButtonTransitions ButtonInterpreter::update(bool rawPressed, uint32_t nowMs) {
@@ -29,17 +37,26 @@ ButtonTransitions ButtonInterpreter::update(bool rawPressed, uint32_t nowMs) {
       nowMs - rawChangedAtMs_ >= debounceMs_) {
     stablePressed_ = rawPressed_;
     if (stablePressed_) {
-      transitions.pressed = true;
+      suppressCurrentPress_ =
+          hasAcceptedPress_ &&
+          nowMs - lastAcceptedPressAtMs_ < MINIMUM_PRESS_INTERVAL_MS;
+      transitions.pressed = !suppressCurrentPress_;
+      if (!suppressCurrentPress_) {
+        lastAcceptedPressAtMs_ = nowMs;
+        hasAcceptedPress_ = true;
+      }
       longStarted_ = false;
       pressedAtMs_ = nowMs;
       nextRepeatAtMs_ = nowMs + longPressDelayMs_;
     } else {
       transitions.released = true;
-      transitions.shortPress = !longStarted_;
+      transitions.shortPress = !longStarted_ && !suppressCurrentPress_;
+      suppressCurrentPress_ = false;
     }
   }
 
-  if (stablePressed_ && !longStarted_ && longPressDelayMs_ > 0 &&
+  if (stablePressed_ && !suppressCurrentPress_ && !longStarted_ &&
+      longPressDelayMs_ > 0 &&
       nowMs - pressedAtMs_ >= longPressDelayMs_) {
     longStarted_ = true;
     transitions.longStart = true;

@@ -97,6 +97,7 @@ class ApplicationCore {
   void beginTimeEdit(bool startup);
   void resetTrip1();
   void resetTrip2();
+  void updateMittisTripStart();
   void addDistance(int64_t deltaMillimeters, uint32_t pulseCount);
   domain::EventRecord makeEvent(domain::DomainEventType type) const;
   uint64_t appendEvent(domain::EventRecord record);
@@ -128,6 +129,10 @@ class ApplicationCore {
   uint64_t trip1PulseCount_ = 0;
   uint64_t trip2PulseCount_ = 0;
   bool trip1ResetHeld_ = false;
+  uint16_t mittisTripSegmentIndex_ = 0xFFFFU;
+  bool trip1DisplayFreezeActive_ = false;
+  int64_t trip1DisplayFrozenMm_ = 0;
+  uint64_t trip1DisplayFreezeUntilMs_ = 0;
   bool calibrationSaveFailed_ = false;
   bool calibrationSavePending_ = false;
   bool calibrationSaveInFlight_ = false;

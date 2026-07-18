@@ -32,6 +32,9 @@ class ButtonInterpreter {
   uint32_t rawChangedAtMs_ = 0;
   uint32_t pressedAtMs_ = 0;
   uint32_t nextRepeatAtMs_ = 0;
+  uint32_t lastAcceptedPressAtMs_ = 0;
+  bool hasAcceptedPress_ = false;
+  bool suppressCurrentPress_ = false;
 };
 
 }  // namespace input

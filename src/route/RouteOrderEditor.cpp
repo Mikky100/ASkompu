@@ -22,6 +22,7 @@ domain::JatType emitJatType(uint8_t selection) {
 
 void RouteOrderEditor::beginCreate() {
   draft_ = domain::RouteOrder{};
+  draft_.competitionType = domain::CompetitionType::NON_EMIT;
   phase_ = EditorPhase::COMPETITION_TYPE;
   editingExisting_ = false;
   editingSegment_ = false;
@@ -187,11 +188,6 @@ EditorResult RouteOrderEditor::acceptContinuation() {
 
 EditorResult RouteOrderEditor::handle(EditorKey key, bool longPress) {
   saveFailed_ = false;
-  if (longPress && key == EditorKey::RIGHT && editingExisting_ &&
-      phase_ != EditorPhase::SAVE_PENDING) {
-    phase_ = EditorPhase::REPLACE_PROMPT;
-    return EditorResult::NONE;
-  }
   if (longPress && key == EditorKey::LEFT &&
       phase_ != EditorPhase::SAVE_PENDING) {
     if (!editingExisting_) {
@@ -204,11 +200,6 @@ EditorResult RouteOrderEditor::handle(EditorKey key, bool longPress) {
   if (phase_ == EditorPhase::CANCEL_PROMPT) {
     if (key == EditorKey::LEFT) phase_ = phaseBeforeCancel_;
     if (key == EditorKey::RIGHT) return EditorResult::EXIT;
-    return EditorResult::NONE;
-  }
-  if (phase_ == EditorPhase::REPLACE_PROMPT) {
-    if (key == EditorKey::LEFT) phase_ = EditorPhase::BROWSE;
-    if (key == EditorKey::RIGHT) beginCreate();
     return EditorResult::NONE;
   }
   if (phase_ == EditorPhase::SAVE_PENDING) return EditorResult::NONE;

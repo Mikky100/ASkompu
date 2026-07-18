@@ -17,7 +17,6 @@ enum class EditorPhase : uint8_t {
   JAT_OFFSET,
   BROWSE,
   CANCEL_PROMPT,
-  REPLACE_PROMPT,
   SAVE_PENDING,
 };
 enum class EditorResult : uint8_t { NONE, EXIT, SAVE_REQUESTED };

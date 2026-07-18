@@ -829,16 +829,61 @@ void testResultMenusShowStageTotalAndOrderedEvents() {
   press(app, core::ButtonId::Left);
   press(app, core::ButtonId::Down);
   press(app, core::ButtonId::Right);
-  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(core::ResultViewType::TotalPoints),
-                          static_cast<uint8_t>(app.displayModel().resultView.type));
-  press(app, core::ButtonId::Left);
-  press(app, core::ButtonId::Down);
-  press(app, core::ButtonId::Right);
   const core::ResultViewDisplayModel events = app.displayModel().resultView;
   TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(core::ResultViewType::Events),
                           static_cast<uint8_t>(events.type));
   TEST_ASSERT_TRUE(events.hasEvent);
   TEST_ASSERT_TRUE(events.itemCount >= 3);
+}
+
+void testFinishStageIsLastBrowsableStageResult() {
+  FakeTimeSource source;
+  core::SoftwareClock clock(source);
+  core::ApplicationCore app(clock, 1000, 1000000);
+  domain::CompetitionSettings settings;
+  settings.jatResultSeconds = 0;
+  app.setCompetitionSettings(settings);
+
+  domain::RouteOrder order;
+  order.competitionType = domain::CompetitionType::NON_EMIT;
+  order.startHour = 12;
+  for (uint16_t index = 0; index < 5; ++index) {
+    domain::SegmentDefinition current =
+        segment(index, domain::SegmentType::TIME, 1,
+                index == 4 ? domain::PointType::FINISH_M
+                           : domain::PointType::JAT);
+    if (index < 4) {
+      current.hasJatType = true;
+      current.jatType = domain::JatType::MANNED_JAT;
+      current.hasJatOffsetMinutes = true;
+    }
+    order.segments.push_back(current);
+  }
+  app.setInitialRouteOrder(order, true);
+  acceptNoon(app);
+  for (uint8_t stage = 0; stage < 4; ++stage) {
+    press(app, core::ButtonId::Point, core::ButtonEventType::Release);
+    press(app, core::ButtonId::Right);
+    source.nowMs += 60000;
+    app.tick(source.nowMs * 1000UL);
+  }
+  press(app, core::ButtonId::Point, core::ButtonEventType::Release);
+
+  TEST_ASSERT_EQUAL_size_t(5, app.competition().stageResults().size());
+  TEST_ASSERT_EQUAL_UINT16(4,
+                           app.competition().stageResults().back().stageIndex);
+
+  press(app, core::ButtonId::Left);
+  press(app, core::ButtonId::Down);
+  for (uint8_t index = 0; index < 3; ++index)
+    press(app, core::ButtonId::Down);
+  press(app, core::ButtonId::Right);
+  press(app, core::ButtonId::Right);
+  for (uint8_t index = 0; index < 4; ++index)
+    press(app, core::ButtonId::Down);
+  const core::ResultViewDisplayModel result = app.displayModel().resultView;
+  TEST_ASSERT_EQUAL_UINT16(5, result.itemCount);
+  TEST_ASSERT_EQUAL_UINT16(4, result.stageResult.stageIndex);
 }
 
 void testCoreEventAuditIncludesPointUndoReverseTripAndStageResult() {
@@ -1334,6 +1379,7 @@ int main(int, char**) {
   RUN_TEST(testFinishRequestsPersistentCompletion);
   RUN_TEST(testFinishResultDismissesWithEitherHorizontalButton);
   RUN_TEST(testResultMenusShowStageTotalAndOrderedEvents);
+  RUN_TEST(testFinishStageIsLastBrowsableStageResult);
   RUN_TEST(testCoreEventAuditIncludesPointUndoReverseTripAndStageResult);
   RUN_TEST(testPulseGeneratorCycleIntegration);
   RUN_TEST(testLilyGoCompetitionGPIOContractAndCoreEvents);

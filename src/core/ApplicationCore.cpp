@@ -9,6 +9,8 @@
 namespace core {
 namespace {
 
+constexpr uint64_t MITTIS_TRIP_DISPLAY_FREEZE_MS = 10000ULL;
+
 domain::EventClockTime eventClock(const ClockTime& value) {
   return {value.hour, value.minute, value.second};
 }
@@ -51,7 +53,6 @@ constexpr MenuItem MAIN_ITEMS[] = {
     {"JARJESTELMA", true},
 };
 constexpr MenuItem RESULT_ITEMS[] = {{"JAKSOJEN PISTEET", true},
-                                     {"KOKONAISPISTEET", true},
                                      {"TAPAHTUMAT", true}};
 constexpr MenuItem DISPLAY_ITEMS[] = {{"NAYTTOPROFIILI", false},
                                       {"NAYTTOSELITTEET", false},
@@ -233,6 +234,7 @@ void ApplicationCore::handleButton(const ButtonEvent& event) {
           makeEvent(domain::DomainEventType::NORMAL_POINT);
       record.segmentIndex = endedSegment;
       lastPointEventId_ = appendEvent(record);
+      updateMittisTripStart();
     } else if (result == domain::PointResult::JAT_COMPLETED) {
       domain::EventRecord record = makeEvent(domain::DomainEventType::JAT);
       record.segmentIndex = endedSegment;
@@ -379,7 +381,7 @@ void ApplicationCore::handleResultView(const ButtonEvent& event) {
   else if (event.eventType == ButtonEventType::Press &&
            event.buttonId == ButtonId::Left) {
     openSubmenu(MenuPage::Results);
-    menuSelectedIndex_ = static_cast<uint8_t>(resultViewType_);
+    menuSelectedIndex_ = resultViewType_ == ResultViewType::StageResults ? 0 : 1;
   }
 }
 
@@ -852,8 +854,7 @@ void ApplicationCore::activateMenuItem() {
   if (menuPage_ == MenuPage::Main) {
     mainMenuSelectedIndex_ = menuSelectedIndex_;
     if (menuSelectedIndex_ == 0) {
-      if (competition_.state() == domain::CompetitionState::WAIT_START ||
-          competition_.state() == domain::CompetitionState::RUNNING) {
+      if (hasRouteOrder_) {
         orderAccessAction_ = OrderAccessAction::Edit;
         screen_ = Screen::OrderAccessPrompt;
         return;
@@ -889,7 +890,8 @@ void ApplicationCore::activateMenuItem() {
     editedTextColor_ = static_cast<domain::TextColor>(menuSelectedIndex_);
     textColorSavePending_ = true;
   } else if (menuPage_ == MenuPage::Results) {
-    resultViewType_ = static_cast<ResultViewType>(menuSelectedIndex_);
+    resultViewType_ = menuSelectedIndex_ == 0 ? ResultViewType::StageResults
+                                              : ResultViewType::Events;
     resultSelectedIndex_ = 0;
     screen_ = Screen::ResultView;
   } else if (menuPage_ == MenuPage::Trips) {
@@ -903,7 +905,7 @@ void ApplicationCore::activateMenuItem() {
   } else if (menuPage_ == MenuPage::System && menuSelectedIndex_ == 1) {
     openSubmenu(MenuPage::Debug);
   } else if (menuPage_ == MenuPage::Debug && menuSelectedIndex_ == 0) {
-    editedDebugDisplaySettings_ = debugDisplaySettings_;
+    if (debugDisplaySaveInFlight_) return;
     editedDebugDisplaySettings_.enabledElements ^=
         static_cast<uint16_t>(domain::DebugDisplayElement::SPEED);
     debugDisplaySavePending_ =
@@ -940,6 +942,24 @@ void ApplicationCore::resetTrip2() {
   domain::EventRecord record = makeEvent(domain::DomainEventType::TRIP_RESET);
   record.payload.tripChannel = domain::TripChannel::TRIP_2;
   appendEvent(record);
+}
+
+void ApplicationCore::updateMittisTripStart() {
+  if (competition_.state() != domain::CompetitionState::RUNNING) return;
+  const domain::SegmentDefinition* segment = competition_.currentSegment();
+  if (!segment || segment->segmentType != domain::SegmentType::MITTIS) {
+    mittisTripSegmentIndex_ = 0xFFFFU;
+    trip1DisplayFreezeActive_ = false;
+    return;
+  }
+  const uint16_t segmentIndex = competition_.currentSegmentIndex();
+  if (mittisTripSegmentIndex_ == segmentIndex) return;
+  mittisTripSegmentIndex_ = segmentIndex;
+  resetTrip1();
+  trip1DisplayFrozenMm_ = trip1DistanceMm_;
+  trip1DisplayFreezeActive_ = true;
+  trip1DisplayFreezeUntilMs_ =
+      clock_.elapsedSinceSetMilliseconds() + MITTIS_TRIP_DISPLAY_FREEZE_MS;
 }
 
 void ApplicationCore::handleDistancePulses(const DistancePulseEvent& event) {
@@ -1001,6 +1021,10 @@ void ApplicationCore::tick(uint32_t nowUs) {
     clock_.now();
     const domain::CompetitionState before = competition_.state();
     competition_.tick(clock_.elapsedSinceSetMilliseconds());
+    updateMittisTripStart();
+    if (trip1DisplayFreezeActive_ &&
+        clock_.elapsedSinceSetMilliseconds() >= trip1DisplayFreezeUntilMs_)
+      trip1DisplayFreezeActive_ = false;
     if (before == domain::CompetitionState::JAT_RESULT &&
         competition_.state() == domain::CompetitionState::EDIT_START_TIME)
       beginJatStartTimeEdit();
@@ -1041,7 +1065,9 @@ DisplayModel ApplicationCore::displayModel() const {
   model.speedKmh = speedCalculator_.speedKmh();
   model.showSpeed = debugDisplaySettings_.enabled(
       domain::DebugDisplayElement::SPEED);
-  model.trip1 = {trip1DistanceMm_, true};
+  model.trip1 = {trip1DisplayFreezeActive_ ? trip1DisplayFrozenMm_
+                                           : trip1DistanceMm_,
+                 true};
   model.trip2 = {trip2DistanceMm_, true};
   model.timeEntry = {editedHour_, editedMinute_, activeTimeField_,
                      startupTimeEdit_};
@@ -1154,7 +1180,8 @@ DisplayModel ApplicationCore::displayModel() const {
       model.menu.rows[index] = {item.label, item.enabled};
       if (menuPage_ == MenuPage::Debug && menuScrollOffset_ + index == 0) {
         model.menu.rows[index].label =
-            debugDisplaySettings_.enabled(domain::DebugDisplayElement::SPEED)
+            editedDebugDisplaySettings_.enabled(
+                domain::DebugDisplayElement::SPEED)
                 ? "NOPEUS: PAALLA"
                 : "NOPEUS: POIS";
       }
@@ -1336,6 +1363,8 @@ void ApplicationCore::activateCurrentRouteOrder() {
       1000UL;
   if (competition_.activate(currentRouteOrder_, millisecondsOfDay,
                             clock_.elapsedSinceSetMilliseconds())) {
+    mittisTripSegmentIndex_ = 0xFFFFU;
+    trip1DisplayFreezeActive_ = false;
     finishResultDismissed_ = false;
     domain::EventRecord accepted =
         makeEvent(domain::DomainEventType::START_TIME_ACCEPTED);

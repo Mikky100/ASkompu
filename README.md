@@ -14,6 +14,11 @@ run in RAM. JAT supports `MANNED_JAT`, `EMIT_JAT_OFFSET`, `EMIT_MLA` and
 zero points. MITTIS calibration proposals use integer arithmetic and a changed
 factor affects only future pulses.
 
+At the start of every MITTIS segment, Trip 1 resets. Its displayed value stays
+at zero for ten seconds while the internal Trip 1 and competition calculations
+continue accumulating normally; after the hold the current accumulated value
+is shown.
+
 Events are written in order to a hardware-independent RAM repository. The log
 contains point/undo, AT/cancel, JAT, finish, start-time, MITTIS, override,
 reverse and trip-reset records. JAT and finish records carry their `StageResult`;
@@ -60,7 +65,9 @@ Left returns, Right opens or accepts,
 and a long Left abandons the current non-startup UI operation and returns to the
 basic view.
 
-Button edges are captured by interrupts with 20 ms debounce. A dispatched UI
+Button edges are captured by interrupts with 20 ms debounce. A 150 ms accepted
+press guard suppresses a second stable cycle caused by the same physical press.
+A dispatched UI
 event requests an immediate redraw instead of waiting for the periodic display
 refresh. After the finish time and total points are shown, Left or Right returns
 to the normal basic view; the completed competition and its results remain
@@ -76,7 +83,7 @@ workflow; unavailable unrelated items remain visible but dimmed.
 | Ajomääräys | Unified creation, browsing, editing, and confirmed replacement | Implemented |
 | Kello | Direct clock editing | Implemented |
 | Kerroin | Direct mm/pulse calibration editing | Implemented |
-| Pisteet ja tapahtumat | Jaksojen pisteet, Kokonaispisteet, Tapahtumat | Implemented from the current RAM event/result data |
+| Pisteet ja tapahtumat | Jaksojen pisteet, Tapahtumat | Implemented from the current RAM event/result data; stage browsing also shows the total |
 | Näyttöasetukset | Näyttöprofiili, Näyttöselitteet, Aikaeron muoto, Trip-tarkkuus, Tekstin väri | Persistent white/red/green text color works; other rows remain unavailable |
 | Tripit | Nollaa Trip 1, Nollaa Trip 2, Ulkoinen trip | Both resets work; external display source needs its hardware/protocol adapter |
 | Järjestelmä | Diagnostiikka, Debug, Painikeasetukset, Muut asetukset | Diagnostics and persistent Debug speed work; button/system settings are not implemented |
@@ -106,8 +113,8 @@ stop pulse processing.
 ## Route-order creation, editing, and storage
 
 `AJOMAARAYS` is now one top-level workflow. With no stored order it first asks
-for `EMIT` or `NON-EMIT`, locks that choice, asks for the competition start time,
-and then enters ordered TIME, SPEED, or MITTIS segments. Each accepted TIME or
+for `EI EMIT` (the default) or `EMIT`, locks that choice, asks for the
+competition start time, and then enters ordered TIME, SPEED, or MITTIS segments. Each accepted TIME or
 SPEED value continues with `SEURAAVA`, `JAT`, or `MAALI`. TIME accepts 1...3599
 seconds and SPEED a two-digit 1...99 km/h value. MITTIS accepts 1000...9999
 metres and then a TIME value for that same interval; SPEED is not available as
@@ -117,14 +124,15 @@ Segment
 browsing labels the start point as `L` and the finish point as `M`, for example
 `L-1` and `3-M`.
 
-With an existing order, Up/Down browses segments, Right edits the selected
-segment, and Left returns or abandons the in-progress edit. A long Right opens
-the `UUSI AJOMAARAYS?` confirmation; Left declines and Right starts a separate
-replacement draft. Competition type is not part of ordinary editing.
-
-In `WAIT_START` and `RUNNING`, opening `AJOMAARAYS` first shows `MUOKKAA
-AJOMAARAYS`. Up/Down toggles to `KORVAA AJOMAARAYS`, Right confirms the selected
-workflow, and Left returns to the menu.
+With an existing order, opening `AJOMAARAYS` always first shows `MUOKKAA
+AJOMAARAYS`, including in `IDLE`. Up/Down toggles to `KORVAA AJOMAARAYS`, Right
+confirms the selected workflow, and Left returns to the menu without changing
+the order or competition state. Editing then browses segments with Up/Down,
+Right edits the selected segment, and Left returns or abandons the in-progress
+edit. Replacement starts a separate draft from the competition-type selection;
+the old long-Right replacement prompt is not used. Competition type is not part
+of ordinary editing. The UI term `EI EMIT` maps to the unchanged domain enum
+`CompetitionType::NON_EMIT`.
 
 The domain model and validator are in `src/domain/RouteOrder.*`. The editor,
 binary codec, and UI-independent storage port are in `src/route/`. The ESP32
@@ -169,6 +177,9 @@ import adapter.
   unchanged periodic frames produce no SPI transfer, basic-view fields update
   independently, and an unchanged menu page moves only its narrow selection
   marker. The external ILI9488 SPI clock is 40 MHz.
+  Both display profiles normally request basic/competition-view updates every
+  100 ms; the ILI9488 port still transfers only changed cropped regions and
+  avoids clearing the full PSRAM sprite for an ordinary trip-only update.
 - `src/main.cpp` wires the adapters and keeps pulse, button, speed, clock, save,
   and display work non-blocking.
 

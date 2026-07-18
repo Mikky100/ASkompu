@@ -32,6 +32,7 @@ class DisplayView : public DisplayPort {
   void showOrderAccess(const core::OrderAccessDisplayModel& model);
   void showOrder(const core::OrderDisplayModel& model);
   void showDiagnostics(const core::DiagnosticsDisplayModel& model);
+  void drawFooter(const char* text, uint16_t color = TFT_LIGHTGREY);
 
   TFT_eSPI display_;
   TFT_eSprite canvas_;

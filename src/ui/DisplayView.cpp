@@ -6,6 +6,7 @@
 
 #include "BoardConfig.h"
 #include "DisplayLayout.h"
+#include "RouteOrderFormatting.h"
 
 namespace ui {
 namespace {
@@ -53,36 +54,6 @@ void formatSegmentValue(char* text, size_t size,
   } else {
     text[0] = '\0';
   }
-}
-
-void formatEditableValue(char* text, size_t size,
-                         const route::RouteOrderEditorView& editor) {
-  char digits[12]{};
-  uint8_t count = 0;
-  if (editor.segmentType == domain::SegmentType::TIME ||
-      editor.enteringMittisTime) {
-    std::snprintf(digits, sizeof(digits), "%02lu%02lu",
-                  static_cast<unsigned long>(editor.value / 60),
-                  static_cast<unsigned long>(editor.value % 60));
-    count = 4;
-  } else if (editor.segmentType == domain::SegmentType::SPEED) {
-    std::snprintf(digits, sizeof(digits), "%02lu",
-                  static_cast<unsigned long>(editor.value));
-    count = 2;
-  } else {
-    std::snprintf(digits, sizeof(digits), "%04lu",
-                  static_cast<unsigned long>(editor.value));
-    count = 4;
-  }
-  size_t output = 0;
-  for (uint8_t index = 0; index < count && output + 4 < size; ++index) {
-    if (index == editor.digitCursor) text[output++] = '[';
-    text[output++] = digits[index];
-    if (index == editor.digitCursor) text[output++] = ']';
-    if (editor.segmentType == domain::SegmentType::TIME && index == 1)
-      text[output++] = ':';
-  }
-  text[output] = '\0';
 }
 
 const char* eventTypeName(domain::DomainEventType type) {
@@ -217,6 +188,14 @@ void DisplayView::setBacklight(bool enabled) {
 uint16_t DisplayView::width() const { return BoardConfig::DISPLAY_WIDTH; }
 uint16_t DisplayView::height() const { return BoardConfig::DISPLAY_HEIGHT; }
 
+void DisplayView::drawFooter(const char* text, uint16_t color) {
+  canvas_.setTextDatum(BC_DATUM);
+  canvas_.setTextSize(BoardConfig::DISPLAY_WIDTH >= 480 ? 2 : 1);
+  canvas_.setTextColor(color, TFT_BLACK);
+  canvas_.drawString(text, BoardConfig::DISPLAY_WIDTH / 2,
+                     BoardConfig::DISPLAY_HEIGHT - 6, 1);
+}
+
 void DisplayView::render(const core::DisplayModel& model) {
   if (!spriteReady_) return;
   switch (model.textColor) {
@@ -231,7 +210,35 @@ void DisplayView::render(const core::DisplayModel& model) {
       textColor_ = TFT_WHITE;
       break;
   }
-  canvas_.fillSprite(TFT_BLACK);
+  const bool sameScreen = hasRendered_ && renderedScreen_ == model.screen;
+  const bool colorChanged = hasRendered_ &&
+                            lastModel_.textColor != model.textColor;
+  if (sameScreen && !colorChanged && model.screen == core::Screen::BasicView &&
+      lastModel_.finishResult.visible == model.finishResult.visible &&
+      !model.finishResult.visible) {
+    const DisplayLayout layout =
+        layoutFor(BoardConfig::DISPLAY_WIDTH, BoardConfig::DISPLAY_HEIGHT);
+    if (lastModel_.trip1.distanceMillimeters !=
+        model.trip1.distanceMillimeters)
+      canvas_.fillRect(layout.trip1.x, layout.trip1.y, layout.trip1.width,
+                       layout.trip1.height, TFT_BLACK);
+    if (!sameClock(lastModel_.clock, model.clock))
+      canvas_.fillRect(layout.clock.x, layout.clock.y, layout.clock.width,
+                       layout.clock.height, TFT_BLACK);
+    if (!sameCompetition(lastModel_.competition, model.competition) ||
+        !sameAtOverlay(lastModel_.atOverlay, model.atOverlay)) {
+      canvas_.fillRect(0, layout.currentSegment.y, BoardConfig::DISPLAY_WIDTH,
+                       BoardConfig::DISPLAY_HEIGHT - layout.currentSegment.y,
+                       TFT_BLACK);
+    } else if (lastModel_.showSpeed != model.showSpeed ||
+               lastModel_.speedKmh != model.speedKmh) {
+      canvas_.fillRect(layout.debugSpeed.x, layout.debugSpeed.y,
+                       layout.debugSpeed.width, layout.debugSpeed.height,
+                       TFT_BLACK);
+    }
+  } else {
+    canvas_.fillSprite(TFT_BLACK);
+  }
   canvas_.setTextSize(1);
   switch (model.screen) {
     case core::Screen::StartupTimeEntry:
@@ -275,9 +282,6 @@ void DisplayView::render(const core::DisplayModel& model) {
       showDiagnostics(model.diagnostics);
       break;
   }
-  const bool sameScreen = hasRendered_ && renderedScreen_ == model.screen;
-  const bool colorChanged = hasRendered_ &&
-                            lastModel_.textColor != model.textColor;
   if (!sameScreen || colorChanged) {
     canvas_.pushSprite(0, 0);
   } else if (model.screen == core::Screen::Menu) {
@@ -341,10 +345,14 @@ void DisplayView::render(const core::DisplayModel& model) {
     canvas_.pushSprite(0, top, 0, top, BoardConfig::DISPLAY_WIDTH,
                        bottom - top);
   } else if (model.screen == core::Screen::OrderEdit) {
-    const int16_t top = BoardConfig::DISPLAY_WIDTH >= 480 ? 80 : 40;
-    const int16_t bottom = BoardConfig::DISPLAY_HEIGHT - 34;
-    canvas_.pushSprite(0, top, 0, top, BoardConfig::DISPLAY_WIDTH,
-                       bottom - top);
+    if (lastModel_.order.editor.phase != model.order.editor.phase) {
+      canvas_.pushSprite(0, 0);
+    } else {
+      const int16_t top = BoardConfig::DISPLAY_WIDTH >= 480 ? 80 : 40;
+      const int16_t bottom = BoardConfig::DISPLAY_HEIGHT - 34;
+      canvas_.pushSprite(0, top, 0, top, BoardConfig::DISPLAY_WIDTH,
+                         bottom - top);
+    }
   } else if (model.screen == core::Screen::Diagnostics) {
     canvas_.pushSprite(0, 0);
   } else {
@@ -412,9 +420,7 @@ void DisplayView::showResultView(const core::ResultViewDisplayModel& model) {
                   model.selectedIndex + 1, model.itemCount);
     canvas_.drawString(position, BoardConfig::DISPLAY_WIDTH / 2, 139, 1);
   }
-  canvas_.setTextColor(textColor_, TFT_BLACK);
-  canvas_.drawString("YLOS/ALAS SELAA   VASEN PALAA",
-                     BoardConfig::DISPLAY_WIDTH / 2, 158, 1);
+  drawFooter("YLOS/ALAS SELAA  VASEN PALAA", textColor_);
 }
 
 void DisplayView::showOverrideMenu(
@@ -430,10 +436,7 @@ void DisplayView::showOverrideMenu(
           ? "LISAMAARAYS"
           : "TIEKATKO",
       BoardConfig::DISPLAY_WIDTH / 2, 78, 2);
-  canvas_.setTextSize(1);
-  canvas_.setTextColor(textColor_, TFT_BLACK);
-  canvas_.drawString("YLOS/ALAS   VASEN PERU   OIKEA AVAA",
-                     BoardConfig::DISPLAY_WIDTH / 2, 150, 1);
+  drawFooter("YLOS/ALAS  VASEN PERU  OIKEA AVAA", textColor_);
 }
 
 void DisplayView::showOverrideEdit(
@@ -460,13 +463,12 @@ void DisplayView::showOverrideEdit(
   canvas_.setTextColor(model.invalid ? TFT_RED : textColor_, TFT_BLACK);
   canvas_.drawString(value, BoardConfig::DISPLAY_WIDTH / 2, 76, 2);
   canvas_.setTextSize(1);
-  canvas_.setTextColor(model.invalid ? TFT_RED : textColor_, TFT_BLACK);
-  canvas_.drawString(model.invalid ? "VALINTA EI KELPAA"
-                                   : "YLOS/ALAS MUUTTAA",
-                     BoardConfig::DISPLAY_WIDTH / 2, 122, 1);
-  canvas_.setTextColor(textColor_, TFT_BLACK);
-  canvas_.drawString("VASEN PALAA   OIKEA JATKAA",
-                     BoardConfig::DISPLAY_WIDTH / 2, 151, 1);
+  if (model.invalid) {
+    canvas_.setTextColor(TFT_RED, TFT_BLACK);
+    canvas_.drawString("VALINTA EI KELPAA", BoardConfig::DISPLAY_WIDTH / 2,
+                       122, 1);
+  }
+  drawFooter("YLOS/ALAS  VASEN PALAA  OIKEA JATKAA", textColor_);
 }
 
 void DisplayView::showJatResult(const core::JatResultDisplayModel& model) {
@@ -486,9 +488,7 @@ void DisplayView::showJatResult(const core::JatResultDisplayModel& model) {
   canvas_.setTextSize(2);
   canvas_.setTextColor(TFT_YELLOW, TFT_BLACK);
   canvas_.drawString(delta, BoardConfig::DISPLAY_WIDTH / 2, 118, 2);
-  canvas_.setTextSize(1);
-  canvas_.setTextColor(textColor_, TFT_BLACK);
-  canvas_.drawString("OIKEA JATKAA", BoardConfig::DISPLAY_WIDTH / 2, 158, 1);
+  drawFooter("OIKEA JATKAA", textColor_);
 }
 
 void DisplayView::showStartTimeEdit(
@@ -503,13 +503,10 @@ void DisplayView::showStartTimeEdit(
   canvas_.setTextSize(3);
   canvas_.setTextColor(model.valueVisible ? textColor_ : TFT_BLACK, TFT_BLACK);
   canvas_.drawString(value, BoardConfig::DISPLAY_WIDTH / 2, 75, 2);
-  canvas_.setTextSize(1);
-  canvas_.setTextColor(textColor_, TFT_BLACK);
-  canvas_.drawString("YLOS/ALAS +/- 1 MIN", BoardConfig::DISPLAY_WIDTH / 2,
-                     124, 1);
-  canvas_.drawString(model.acceptsWithPoint ? "VAIHTOPISTE HYVAKSYY"
-                                            : "OIKEA HYVAKSYY",
-                     BoardConfig::DISPLAY_WIDTH / 2, 151, 1);
+  drawFooter(model.acceptsWithPoint
+                 ? "YLOS/ALAS +/-1 MIN  PISTE HYVAKSYY"
+                 : "YLOS/ALAS +/-1 MIN  OIKEA HYVAKSYY",
+             textColor_);
 }
 
 void DisplayView::showMittis(const core::MittisDisplayModel& model) {
@@ -530,12 +527,11 @@ void DisplayView::showMittis(const core::MittisDisplayModel& model) {
   canvas_.setTextSize(1);
   canvas_.setTextColor(model.saveFailed ? TFT_RED : textColor_, TFT_BLACK);
   canvas_.drawString(model.saveFailed ? "TALLENNUSVIRHE - VANHA KERROIN"
-                                      : (model.valid ? "VAIHDA?" : "VASEN JATKAA"),
+                                      : (model.valid ? "VAIHDA?" : "EHDOTUS EI KELPAA"),
                      BoardConfig::DISPLAY_WIDTH / 2, 116, 1);
-  canvas_.setTextColor(textColor_, TFT_BLACK);
-  canvas_.drawString(model.valid ? "VASEN HYLKAA   OIKEA HYVAKSYY"
-                                 : "VASEN HYLKAA EHDOTUKSEN",
-                     BoardConfig::DISPLAY_WIDTH / 2, 150, 1);
+  drawFooter(model.valid ? "VASEN HYLKAA  OIKEA HYVAKSYY"
+                         : "VASEN HYLKAA EHDOTUKSEN",
+             textColor_);
 }
 
 void DisplayView::showOrderAccess(const core::OrderAccessDisplayModel& model) {
@@ -548,10 +544,7 @@ void DisplayView::showOrderAccess(const core::OrderAccessDisplayModel& model) {
   canvas_.setTextColor(textColor_, TFT_BLACK);
   canvas_.drawString(edit ? "MUOKKAA AJOMAARAYS" : "KORVAA AJOMAARAYS",
                      BoardConfig::DISPLAY_WIDTH / 2, 78, 2);
-  canvas_.setTextSize(1);
-  canvas_.setTextColor(textColor_, TFT_BLACK);
-  canvas_.drawString("YLOS/ALAS VAIHTAA   OIKEA HYVAKSYY",
-                     BoardConfig::DISPLAY_WIDTH / 2, 150, 1);
+  drawFooter("YLOS/ALAS VAIHTAA  OIKEA HYVAKSYY", textColor_);
 }
 
 void DisplayView::showBasicView(const core::DisplayModel& model) {
@@ -680,11 +673,7 @@ void DisplayView::showFinishResult(
   canvas_.setTextColor(TFT_YELLOW, TFT_BLACK);
   canvas_.drawString(pointsText, BoardConfig::DISPLAY_WIDTH / 2,
                      BoardConfig::DISPLAY_HEIGHT * 65 / 100, 2);
-  canvas_.setTextDatum(BC_DATUM);
-  canvas_.setTextSize(BoardConfig::DISPLAY_WIDTH >= 480 ? 2 : 1);
-  canvas_.setTextColor(textColor_, TFT_BLACK);
-  canvas_.drawString("VASEN/OIKEA PALAA", BoardConfig::DISPLAY_WIDTH / 2,
-                     BoardConfig::DISPLAY_HEIGHT - 8, 1);
+  drawFooter("VASEN/OIKEA PALAA", textColor_);
 }
 
 void DisplayView::showTimeEntry(const core::TimeEntryDisplayModel& model) {
@@ -706,11 +695,7 @@ void DisplayView::showTimeEntry(const core::TimeEntryDisplayModel& model) {
   canvas_.setTextDatum(MC_DATUM);
   canvas_.setTextColor(textColor_, TFT_BLACK);
   canvas_.drawString(value, centerX, valueY, 2);
-  canvas_.setTextSize(BoardConfig::DISPLAY_WIDTH >= 480 ? 2 : 1);
-  canvas_.setTextDatum(BC_DATUM);
-  canvas_.setTextColor(textColor_, TFT_BLACK);
-  canvas_.drawString("YLOS/ALAS MUUTTAA   OIKEA JATKAA", centerX,
-                     BoardConfig::DISPLAY_HEIGHT - 8, 1);
+  drawFooter("YLOS/ALAS MUUTTAA  OIKEA JATKAA", textColor_);
 }
 
 void DisplayView::showMenu(const core::MenuDisplayModel& model) {
@@ -774,29 +759,23 @@ void DisplayView::showCalibration(
   canvas_.setTextSize(2);
   canvas_.setTextColor(textColor_, TFT_BLACK);
   canvas_.drawString(valueText, BoardConfig::DISPLAY_WIDTH / 2, 75, 2);
-  canvas_.setTextSize(1);
   canvas_.setTextColor(model.saveFailed ? TFT_RED : textColor_, TFT_BLACK);
-  canvas_.drawString(model.saveFailed ? "TALLENNUSVIRHE" : "YLOS/ALAS +/- 1",
-                     BoardConfig::DISPLAY_WIDTH / 2, 118, 1);
-  canvas_.setTextColor(textColor_, TFT_BLACK);
-  canvas_.drawString("VASEN HYLKAA   OIKEA HYVAKSYY",
-                     BoardConfig::DISPLAY_WIDTH / 2, 148, 1);
+  if (model.saveFailed)
+    canvas_.drawString("TALLENNUSVIRHE", BoardConfig::DISPLAY_WIDTH / 2,
+                       118, 2);
+  drawFooter("YLOS/ALAS +/-1  VASEN PERU  OIKEA OK", textColor_);
 }
 
 void DisplayView::showOrder(const core::OrderDisplayModel& model) {
   const route::RouteOrderEditorView& editor = model.editor;
-  const char* title = "AJOMAARAYS";
+  const char* title = routeOrderEditorTitle(editor);
   const char* primary = "";
   char value[48]{};
   switch (editor.phase) {
     case route::EditorPhase::COMPETITION_TYPE:
-      title = "KILPAILUTYYPPI";
-      primary = editor.competitionType == domain::CompetitionType::EMIT
-                    ? "EMIT"
-                    : "NON-EMIT";
+      primary = competitionTypeLabel(editor.competitionType);
       break;
     case route::EditorPhase::START_TIME:
-      title = "KILPAILUN LAHTOAIKA";
       if (editor.startTimeField == 0)
         std::snprintf(value, sizeof(value), "[%02u]:%02u", editor.startHour,
                       editor.startMinute);
@@ -820,7 +799,7 @@ void DisplayView::showOrder(const core::OrderDisplayModel& model) {
                          ? "NOPEUS"
                          : (editor.enteringMittisTime ? "MITTIS AIKA"
                                                       : "MITTIS METRIA"));
-      formatEditableValue(value, sizeof(value), editor);
+      formatEditableRouteOrderValue(value, sizeof(value), editor);
       primary = value;
       break;
     case route::EditorPhase::CONTINUATION: {
@@ -892,10 +871,6 @@ void DisplayView::showOrder(const core::OrderDisplayModel& model) {
       title = "KESKEYTETAANKO?";
       primary = "VASEN EI   OIKEA KYLLA";
       break;
-    case route::EditorPhase::REPLACE_PROMPT:
-      title = "UUSI AJOMAARAYS?";
-      primary = "VASEN EI   OIKEA KYLLA";
-      break;
     case route::EditorPhase::SAVE_PENDING:
       title = "TALLENNETAAN";
       primary = "ODOTA";
@@ -917,10 +892,11 @@ void DisplayView::showOrder(const core::OrderDisplayModel& model) {
                      BoardConfig::DISPLAY_HEIGHT * 46 / 100, 2);
   canvas_.setTextSize(BoardConfig::DISPLAY_WIDTH >= 480 ? 2 : 1);
   canvas_.setTextColor(editor.saveFailed ? TFT_RED : textColor_, TFT_BLACK);
-  canvas_.drawString(editor.saveFailed ? "TALLENNUSVIRHE"
-                                       : "YLOS/ALAS   VASEN   OIKEA",
-                     BoardConfig::DISPLAY_WIDTH / 2,
-                     BoardConfig::DISPLAY_HEIGHT - 10, 1);
+  if (editor.phase != route::EditorPhase::COMPETITION_TYPE) {
+    drawFooter(editor.saveFailed ? "TALLENNUSVIRHE"
+                                 : "YLOS/ALAS  VASEN  OIKEA",
+               editor.saveFailed ? TFT_RED : textColor_);
+  }
 }
 
 void DisplayView::showDiagnostics(
@@ -981,11 +957,7 @@ void DisplayView::showDiagnostics(
   std::snprintf(line, sizeof(line), "KULUNUT %" PRIu64 " ms",
                 model.clockElapsedMilliseconds);
   canvas_.drawString(line, 4, y, 1);
-  canvas_.setTextDatum(BR_DATUM);
-  canvas_.setTextSize(scale);
-  canvas_.setTextColor(textColor_, TFT_BLACK);
-  canvas_.drawString("VASEN PALAA", BoardConfig::DISPLAY_WIDTH - 4,
-                     BoardConfig::DISPLAY_HEIGHT - 2, 1);
+  drawFooter("VASEN PALAA", textColor_);
 }
 
 }  // namespace ui

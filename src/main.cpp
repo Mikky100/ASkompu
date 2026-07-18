@@ -225,13 +225,6 @@ void loop() {
       dispatchButton(footResetButton, core::ButtonId::FootReset, nowMs);
 #endif
 
-  if (pulseSnapshot.pendingPulses > 0) {
-    Serial.printf("GPIO%u pulses: %lu, total: %lu\n",
-                  static_cast<unsigned>(BoardConfig::PIN_PULSE_INPUT),
-                  static_cast<unsigned long>(pulseSnapshot.pendingPulses),
-                  static_cast<unsigned long>(pulseSnapshot.totalPulses));
-  }
-
   application.handleDistancePulses(
       {pulseSnapshot.pendingPulses, pulseSnapshot.previousPulseAtUs,
        pulseSnapshot.lastPulseAtUs, nowUs, reverseFilter.active()});
