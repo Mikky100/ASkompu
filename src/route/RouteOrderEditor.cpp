@@ -75,6 +75,15 @@ uint8_t RouteOrderEditor::digitCount() const {
   return 4;
 }
 
+bool RouteOrderEditor::canSelectMittis() const {
+  for (size_t index = 0; index < draft_.segments.size(); ++index) {
+    if (editingSegment_ && index + 1 == selectedSegment_) continue;
+    if (draft_.segments[index].segmentType == domain::SegmentType::MITTIS)
+      return false;
+  }
+  return true;
+}
+
 void RouteOrderEditor::adjustValue(int8_t direction) {
   if (working_.segmentType == domain::SegmentType::TIME ||
       enteringMittisTime_) {
@@ -253,8 +262,10 @@ EditorResult RouteOrderEditor::handle(EditorKey key, bool longPress) {
   if (phase_ == EditorPhase::SEGMENT_TYPE) {
     if (key == EditorKey::UP || key == EditorKey::DOWN) {
       const uint8_t current = static_cast<uint8_t>(working_.segmentType);
+      const uint8_t typeCount = canSelectMittis() ? 3 : 2;
       const uint8_t next = static_cast<uint8_t>(
-          (current + (key == EditorKey::UP ? 2 : 1)) % 3);
+          (current + (key == EditorKey::UP ? typeCount - 1 : 1)) %
+          typeCount);
       working_.segmentType = static_cast<domain::SegmentType>(next);
       working_.value = 0;
       working_.hasMittisDuration = false;

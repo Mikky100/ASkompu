@@ -834,12 +834,18 @@ void ApplicationCore::handleCalibration(const ButtonEvent& event) {
   const bool step = event.eventType == ButtonEventType::Press ||
                     event.eventType == ButtonEventType::LongRepeat;
   if (step && event.buttonId == ButtonId::Up) {
-    editedMillimetersPerPulse_ =
-        domain::calibration::increment(editedMillimetersPerPulse_);
+    const uint8_t increments =
+        event.eventType == ButtonEventType::LongRepeat ? 10 : 1;
+    for (uint8_t index = 0; index < increments; ++index)
+      editedMillimetersPerPulse_ =
+          domain::calibration::increment(editedMillimetersPerPulse_);
     calibrationSaveFailed_ = false;
   } else if (step && event.buttonId == ButtonId::Down) {
-    editedMillimetersPerPulse_ =
-        domain::calibration::decrement(editedMillimetersPerPulse_);
+    const uint8_t decrements =
+        event.eventType == ButtonEventType::LongRepeat ? 10 : 1;
+    for (uint8_t index = 0; index < decrements; ++index)
+      editedMillimetersPerPulse_ =
+          domain::calibration::decrement(editedMillimetersPerPulse_);
     calibrationSaveFailed_ = false;
   } else if (event.eventType == ButtonEventType::Press &&
              event.buttonId == ButtonId::Left) {
@@ -938,7 +944,7 @@ void ApplicationCore::activateMenuItem() {
     mainMenuSelectedIndex_ = menuSelectedIndex_;
     if (menuSelectedIndex_ == 0) {
       if (hasRouteOrder_) {
-        orderAccessAction_ = OrderAccessAction::Edit;
+        orderAccessAction_ = OrderAccessAction::Replace;
         screen_ = Screen::OrderAccessPrompt;
         return;
       }
@@ -1229,14 +1235,21 @@ DisplayModel ApplicationCore::displayModel() const {
   model.competition.undoPromptVisible = competition_.hasUndoPrompt(
       clock_.isSet() ? clock_.elapsedSinceSetMilliseconds() : 0);
   const domain::SegmentDefinition* current = competition_.currentSegment();
-  if (current) {
-    model.competition.currentSegment = *current;
-    model.competition.hasCurrentSegment = true;
-  }
-  const domain::SegmentDefinition* next = competition_.nextSegment();
-  if (next) {
-    model.competition.nextSegment = *next;
-    model.competition.hasNextSegment = true;
+  if (competition_.state() == domain::CompetitionState::WAIT_START) {
+    if (current) {
+      model.competition.nextSegment = *current;
+      model.competition.hasNextSegment = true;
+    }
+  } else {
+    if (current) {
+      model.competition.currentSegment = *current;
+      model.competition.hasCurrentSegment = true;
+    }
+    const domain::SegmentDefinition* next = competition_.nextSegment();
+    if (next) {
+      model.competition.nextSegment = *next;
+      model.competition.hasNextSegment = true;
+    }
   }
   if (screen_ == Screen::OrderEdit &&
       model.order.editor.phase == route::EditorPhase::BROWSE) {

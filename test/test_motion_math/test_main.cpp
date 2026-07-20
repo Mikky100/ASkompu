@@ -384,6 +384,7 @@ void testCreationCancelAndValidationFailurePreserveCurrentOrder() {
   acceptStartupTime(fixture, 0, 0);
   openMainAt(fixture, 0);
   press(fixture.application, core::ButtonId::Right);  // access prompt
+  press(fixture.application, core::ButtonId::Down);   // edit
   press(fixture.application, core::ButtonId::Right);  // edit
   press(fixture.application, core::ButtonId::Down);
   press(fixture.application, core::ButtonId::Right);  // edit selected
@@ -407,6 +408,7 @@ void testRightEditsSegmentLeftCancelsAndFailedSavePreservesCurrent() {
   acceptStartupTime(fixture, 0, 0);
   openMainAt(fixture, 0);
   press(fixture.application, core::ButtonId::Right);  // access prompt
+  press(fixture.application, core::ButtonId::Down);   // edit
   press(fixture.application, core::ButtonId::Right);  // edit
   press(fixture.application, core::ButtonId::Down);
   press(fixture.application, core::ButtonId::Right);
@@ -448,14 +450,15 @@ void testAccessPromptReplacementKeepsOldUntilSave() {
   openMainAt(fixture, 0);
   press(fixture.application, core::ButtonId::Right);  // access prompt
   TEST_ASSERT_EQUAL_UINT8(
-      static_cast<uint8_t>(core::OrderAccessAction::Edit),
+      static_cast<uint8_t>(core::OrderAccessAction::Replace),
       static_cast<uint8_t>(
           fixture.application.displayModel().orderAccess.selectedAction));
   press(fixture.application, core::ButtonId::Down);
   TEST_ASSERT_EQUAL_UINT8(
-      static_cast<uint8_t>(core::OrderAccessAction::Replace),
+      static_cast<uint8_t>(core::OrderAccessAction::Edit),
       static_cast<uint8_t>(
           fixture.application.displayModel().orderAccess.selectedAction));
+  press(fixture.application, core::ButtonId::Up);
   press(fixture.application, core::ButtonId::Right);  // start replacement
   TEST_ASSERT_EQUAL_UINT8(
       static_cast<uint8_t>(route::EditorPhase::COMPETITION_TYPE),
@@ -501,7 +504,6 @@ void testCancelledReplacementKeepsCurrentOrder() {
   acceptStartupTime(fixture, 0, 0);
   openMainAt(fixture, 0);
   press(fixture.application, core::ButtonId::Right);  // access prompt
-  press(fixture.application, core::ButtonId::Down);   // replace
   press(fixture.application, core::ButtonId::Right);  // start replacement
   fixture.application.handleButton(
       button(core::ButtonId::Left, core::ButtonEventType::LongStart));
@@ -736,7 +738,7 @@ void testOrderMenuStartsUnifiedCreation() {
           fixture.application.displayModel().order.editor));
 }
 
-void testExistingOrderAccessPromptDefaultsToEditAndLeftPreservesOrder() {
+void testExistingOrderAccessPromptDefaultsToNewAndLeftPreservesOrder() {
   Fixture fixture;
   const domain::RouteOrder original =
       makeOrder(domain::CompetitionType::EMIT, domain::SegmentType::TIME, 60);
@@ -748,7 +750,7 @@ void testExistingOrderAccessPromptDefaultsToEditAndLeftPreservesOrder() {
       static_cast<uint8_t>(core::Screen::OrderAccessPrompt),
       static_cast<uint8_t>(fixture.application.screen()));
   TEST_ASSERT_EQUAL_UINT8(
-      static_cast<uint8_t>(core::OrderAccessAction::Edit),
+      static_cast<uint8_t>(core::OrderAccessAction::Replace),
       static_cast<uint8_t>(
           fixture.application.displayModel().orderAccess.selectedAction));
   press(fixture.application, core::ButtonId::Left);
@@ -767,6 +769,7 @@ void testOrderBrowseShowsStartTimeBeforeSegments() {
   acceptStartupTime(fixture, 0, 0);
   openMainAt(fixture, 0);
   press(fixture.application, core::ButtonId::Right);  // access prompt
+  press(fixture.application, core::ButtonId::Down);   // edit
   press(fixture.application, core::ButtonId::Right);  // edit
   TEST_ASSERT_TRUE(fixture.application.displayModel().order.showsStartTime);
   TEST_ASSERT_FALSE(
@@ -908,6 +911,53 @@ void testCalibrationMenuCancelUnchangedAndChangedSave() {
   TEST_ASSERT_EQUAL_UINT32(1001, value);
   fixture.application.completeCalibrationSave(true);
   TEST_ASSERT_EQUAL_UINT32(1001, fixture.application.millimetersPerPulse());
+}
+
+void testCalibrationLongRepeatUsesTenUnitStep() {
+  Fixture fixture;
+  acceptStartupTime(fixture, 0, 0);
+  openMainAt(fixture, 2);
+  press(fixture.application, core::ButtonId::Right);
+  fixture.application.handleButton(
+      button(core::ButtonId::Up, core::ButtonEventType::LongRepeat));
+  TEST_ASSERT_EQUAL_UINT32(
+      1010,
+      fixture.application.displayModel().calibration.editedMillimetersPerPulse);
+  fixture.application.handleButton(
+      button(core::ButtonId::Down, core::ButtonEventType::LongRepeat));
+  TEST_ASSERT_EQUAL_UINT32(
+      1000,
+      fixture.application.displayModel().calibration.editedMillimetersPerPulse);
+}
+
+void testExistingMittisIsNotOfferedForAnotherSegment() {
+  domain::RouteOrder order;
+  domain::SegmentDefinition mittis;
+  mittis.segmentType = domain::SegmentType::MITTIS;
+  mittis.value = 1000;
+  mittis.hasMittisDuration = true;
+  mittis.mittisDurationSeconds = 60;
+  order.segments.push_back(mittis);
+  domain::SegmentDefinition finish;
+  finish.segmentIndex = 1;
+  finish.startPointIndex = 1;
+  finish.endPointIndex = 2;
+  finish.segmentType = domain::SegmentType::TIME;
+  finish.value = 60;
+  finish.pointTypeAtEnd = domain::PointType::FINISH_M;
+  order.segments.push_back(finish);
+
+  route::RouteOrderEditor editor;
+  editor.beginBrowse(order);
+  editor.handle(route::EditorKey::DOWN);
+  editor.handle(route::EditorKey::DOWN);
+  editor.handle(route::EditorKey::RIGHT);
+  editor.handle(route::EditorKey::DOWN);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(domain::SegmentType::SPEED),
+                          static_cast<uint8_t>(editor.view().segmentType));
+  editor.handle(route::EditorKey::DOWN);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(domain::SegmentType::TIME),
+                          static_cast<uint8_t>(editor.view().segmentType));
 }
 
 void testCalibrationSaveFailureStaysInEditor() {
@@ -1314,7 +1364,7 @@ int main(int, char**) {
   RUN_TEST(testMainMenuWrapsAndSubmenuClamps);
   RUN_TEST(testLongMainMenuScrollKeepsSelectionVisible);
   RUN_TEST(testOrderMenuStartsUnifiedCreation);
-  RUN_TEST(testExistingOrderAccessPromptDefaultsToEditAndLeftPreservesOrder);
+  RUN_TEST(testExistingOrderAccessPromptDefaultsToNewAndLeftPreservesOrder);
   RUN_TEST(testOrderBrowseShowsStartTimeBeforeSegments);
   RUN_TEST(testPersistentTextColorSelectionRequest);
   RUN_TEST(testMenuTimeEditCancelAndAccept);
@@ -1323,6 +1373,8 @@ int main(int, char**) {
   RUN_TEST(testDiagnosticsContainsStatesAndDoesNotMutateDomain);
   RUN_TEST(testCalibrationValidationStepAndFallback);
   RUN_TEST(testCalibrationMenuCancelUnchangedAndChangedSave);
+  RUN_TEST(testCalibrationLongRepeatUsesTenUnitStep);
+  RUN_TEST(testExistingMittisIsNotOfferedForAnotherSegment);
   RUN_TEST(testCalibrationSaveFailureStaysInEditor);
   RUN_TEST(testTripResetsAreIndependentAndKeepTotal);
   RUN_TEST(testFootResetMatchesTrip1ResetWithoutChangingTrip2);

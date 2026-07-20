@@ -54,7 +54,8 @@ After time acceptance the basic view shows:
   diagnostics and reset input but is hidden from the basic view;
 - while a competition is active, current segment, right-aligned delta, and next
   segment in fixed left/centre/right regions; `JAT` is shown above a current or
-  next segment whose endpoint is a JAT;
+  next segment whose endpoint is a JAT; while waiting for a start, the segment
+  that will begin is shown in the right-hand next-segment region;
 - optional rounded debug speed with `km/h` in its own bottom region.
 
 It contains no `MENU` or `DEV` text, menu hint, GPIO numbers, button states,
@@ -86,7 +87,7 @@ workflow; unavailable unrelated items remain visible but dimmed.
 |---|---|---|
 | Ajomääräys | Unified creation, browsing, editing, and confirmed replacement | Implemented |
 | Kello | Direct clock editing | Implemented |
-| Kerroin | Direct mm/pulse calibration editing | Implemented |
+| Kerroin | Direct mm/pulse calibration editing | Implemented; a long-repeat step changes the value by 10 instead of 1 |
 | Pisteet ja tapahtumat | Jaksojen pisteet, Tapahtumat | Implemented from the current RAM event/result data; stage browsing also shows the total |
 | Näyttöasetukset | Kirkkaus, Tekstin väri, Näyttöselitteet | Persistent 10...100% PWM brightness, white/red/green text color, and label visibility are implemented |
 | Tripit | Nollaa Trip 1, Nollaa Trip 2, Ulkoinen trip | Both resets work; external display source needs its hardware/protocol adapter |
@@ -118,8 +119,10 @@ stop pulse processing.
 
 `AJOMAARAYS` is now one top-level workflow. With no stored order it first asks
 for `EI EMIT` (the default) or `EMIT`, locks that choice, asks for the
-competition start time, and then enters ordered TIME, SPEED, or MITTIS segments. Each accepted TIME or
-SPEED value continues with `SEURAAVA`, `JAT`, or `MAALI`. TIME accepts 1...3599
+competition start time, and then enters ordered TIME, SPEED, or MITTIS segments.
+After one MITTIS has been entered, later segment-type choices contain only TIME
+and SPEED. Each accepted TIME or SPEED value continues with `SEURAAVA`, `JAT`,
+or `MAALI`. TIME accepts 1...3599
 seconds and SPEED a two-digit 1...99 km/h value. MITTIS accepts 1000...9999
 metres and then a TIME value for that same interval; SPEED is not available as
 the MITTIS interval's time rule. A finish is mandatory. Segment browsing starts
@@ -128,9 +131,9 @@ Segment
 browsing labels the start point as `L` and the finish point as `M`, for example
 `L-1` and `3-M`.
 
-With an existing order, opening `AJOMAARAYS` always first shows `MUOKKAA
-AJOMAARAYS`, including in `IDLE`. Up/Down toggles to `KORVAA AJOMAARAYS`, Right
-confirms the selected workflow, and Left returns to the menu without changing
+With an existing order, opening `AJOMAARAYS` defaults to `UUSI AJOMAARAYS`,
+including in `IDLE`. Up/Down toggles to `MUOKKAA AJOMAARAYS`, Right confirms
+the selected workflow, and Left returns to the menu without changing
 the order or competition state. Editing then browses segments with Up/Down,
 Right edits the selected segment, and Left returns or abandons the in-progress
 edit. Replacement starts a separate draft from the competition-type selection;
@@ -392,8 +395,10 @@ start point. Trip 2 is never reset by JAT automation.
 10. While startup entry, menu, calibration, and diagnostics are visible, verify
     pulses continue accumulating and speed/clock continue updating.
 11. Set display brightness through 10...100%, select every text color, toggle
-    labels, and inspect viewing angle, clipping, sprite refresh, contrast, and
-    flicker for the full 120-second run.
+    labels, and confirm that disabling labels removes all footer instructions.
+    When enabled, verify Left, Up/Down, and Right instructions appear in that
+    physical order. Inspect viewing angle, clipping, sprite refresh, contrast,
+    and flicker for the full 120-second run.
 12. Verify the two boards share GND and 3.3 V logic only; with separate USB
     supplies, do not connect their 5 V pins.
 13. During a pulse run, pull GPIO13 LOW and verify trip and competition distance

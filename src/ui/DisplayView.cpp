@@ -240,12 +240,24 @@ void DisplayView::setBacklightPercent(uint8_t percent) {
 uint16_t DisplayView::width() const { return BoardConfig::DISPLAY_WIDTH; }
 uint16_t DisplayView::height() const { return BoardConfig::DISPLAY_HEIGHT; }
 
-void DisplayView::drawFooter(const char* text, uint16_t color) {
-  canvas_.setTextDatum(BC_DATUM);
-  canvas_.setTextSize(BoardConfig::DISPLAY_WIDTH >= 480 ? 2 : 1);
+void DisplayView::drawFooter(const char* left, const char* upDown,
+                             const char* right, uint16_t color) {
+  if (!showLabels_) return;
   canvas_.setTextColor(color, DISPLAY_BACKGROUND_COLOR);
-  canvas_.drawString(text, BoardConfig::DISPLAY_WIDTH / 2,
-                     BoardConfig::DISPLAY_HEIGHT - 6, 1);
+  const int16_t y = BoardConfig::DISPLAY_HEIGHT - 6;
+  const int16_t columnWidth = BoardConfig::DISPLAY_WIDTH / 3;
+  const auto drawLabel = [&](const char* text, uint8_t datum, int16_t x) {
+    if (!text || !text[0]) return;
+    uint8_t scale = BoardConfig::DISPLAY_WIDTH >= 480 ? 2 : 1;
+    canvas_.setTextSize(scale);
+    if (scale > 1 && canvas_.textWidth(text, 1) > columnWidth - 8)
+      canvas_.setTextSize(--scale);
+    canvas_.setTextDatum(datum);
+    canvas_.drawString(text, x, y, 1);
+  };
+  drawLabel(left, BL_DATUM, 4);
+  drawLabel(upDown, BC_DATUM, BoardConfig::DISPLAY_WIDTH / 2);
+  drawLabel(right, BR_DATUM, BoardConfig::DISPLAY_WIDTH - 4);
 }
 
 void DisplayView::render(const core::DisplayModel& model) {
@@ -267,7 +279,11 @@ void DisplayView::render(const core::DisplayModel& model) {
   const bool sameScreen = hasRendered_ && renderedScreen_ == model.screen;
   const bool colorChanged = hasRendered_ &&
                             lastModel_.textColor != model.textColor;
-  if (sameScreen && !colorChanged && model.screen == core::Screen::BasicView &&
+  const bool labelsChanged = hasRendered_ &&
+                             lastModel_.showLabels != model.showLabels;
+  showLabels_ = model.showLabels;
+  if (sameScreen && !colorChanged && !labelsChanged &&
+      model.screen == core::Screen::BasicView &&
       lastModel_.finishResult.visible == model.finishResult.visible &&
       !model.finishResult.visible) {
     const DisplayLayout layout =
@@ -336,7 +352,7 @@ void DisplayView::render(const core::DisplayModel& model) {
       showDiagnostics(model.diagnostics);
       break;
   }
-  if (!sameScreen || colorChanged) {
+  if (!sameScreen || colorChanged || labelsChanged) {
     canvas_.pushSprite(0, 0);
   } else if (model.screen == core::Screen::Menu) {
     const uint32_t titleFingerprint = textFingerprint(model.menu.title);
@@ -476,7 +492,7 @@ void DisplayView::showResultView(const core::ResultViewDisplayModel& model) {
                   model.selectedIndex + 1, model.itemCount);
     canvas_.drawString(position, BoardConfig::DISPLAY_WIDTH / 2, 139, 1);
   }
-  drawFooter("YLOS/ALAS SELAA  VASEN PALAA", textColor_);
+  drawFooter("VASEN: PALAA", "YLOS/ALAS: SELAA", "", textColor_);
 }
 
 void DisplayView::showOverrideMenu(
@@ -492,7 +508,8 @@ void DisplayView::showOverrideMenu(
           ? "LISAMAARAYS"
           : "TIEKATKO",
       BoardConfig::DISPLAY_WIDTH / 2, 78, 2);
-  drawFooter("YLOS/ALAS  VASEN PERU  OIKEA AVAA", textColor_);
+  drawFooter("VASEN: PERU", "YLOS/ALAS: VAIHDA", "OIKEA: AVAA",
+             textColor_);
 }
 
 void DisplayView::showOverrideEdit(
@@ -524,7 +541,8 @@ void DisplayView::showOverrideEdit(
     canvas_.drawString("VALINTA EI KELPAA", BoardConfig::DISPLAY_WIDTH / 2,
                        122, 1);
   }
-  drawFooter("YLOS/ALAS  VASEN PALAA  OIKEA JATKAA", textColor_);
+  drawFooter("VASEN: PALAA", "YLOS/ALAS: MUUTA", "OIKEA: JATKA",
+             textColor_);
 }
 
 void DisplayView::showJatResult(const core::JatResultDisplayModel& model) {
@@ -544,7 +562,7 @@ void DisplayView::showJatResult(const core::JatResultDisplayModel& model) {
   canvas_.setTextSize(2);
   canvas_.setTextColor(textColor_, DISPLAY_BACKGROUND_COLOR);
   canvas_.drawString(delta, BoardConfig::DISPLAY_WIDTH / 2, 118, 2);
-  drawFooter("OIKEA JATKAA", textColor_);
+  drawFooter("", "", "OIKEA: JATKA", textColor_);
 }
 
 void DisplayView::showStartTimeEdit(
@@ -561,9 +579,8 @@ void DisplayView::showStartTimeEdit(
                                           : DISPLAY_BACKGROUND_COLOR,
                        DISPLAY_BACKGROUND_COLOR);
   canvas_.drawString(value, BoardConfig::DISPLAY_WIDTH / 2, 75, 2);
-  drawFooter(model.acceptsWithPoint
-                 ? "YLOS/ALAS +/-1 MIN  PISTE HYVAKSYY"
-                 : "YLOS/ALAS +/-1 MIN  OIKEA HYVAKSYY",
+  drawFooter("", "YLOS/ALAS: +/-1 MIN",
+             model.acceptsWithPoint ? "PISTE: HYVAKSY" : "OIKEA: HYVAKSY",
              textColor_);
 }
 
@@ -587,9 +604,8 @@ void DisplayView::showMittis(const core::MittisDisplayModel& model) {
   canvas_.drawString(model.saveFailed ? "TALLENNUSVIRHE - VANHA KERROIN"
                                       : (model.valid ? "VAIHDA?" : "EHDOTUS EI KELPAA"),
                      BoardConfig::DISPLAY_WIDTH / 2, 116, 1);
-  drawFooter(model.valid ? "VASEN HYLKAA  OIKEA HYVAKSYY"
-                         : "VASEN HYLKAA EHDOTUKSEN",
-             textColor_);
+  drawFooter(model.valid ? "VASEN: HYLKAA" : "VASEN: POISTU", "",
+             model.valid ? "OIKEA: HYVAKSY" : "", textColor_);
 }
 
 void DisplayView::showOrderAccess(const core::OrderAccessDisplayModel& model) {
@@ -600,9 +616,10 @@ void DisplayView::showOrderAccess(const core::OrderAccessDisplayModel& model) {
   canvas_.setTextDatum(MC_DATUM);
   canvas_.setTextSize(2);
   canvas_.setTextColor(textColor_, DISPLAY_BACKGROUND_COLOR);
-  canvas_.drawString(edit ? "MUOKKAA AJOMAARAYS" : "KORVAA AJOMAARAYS",
+  canvas_.drawString(edit ? "MUOKKAA AJOMAARAYS" : "UUSI AJOMAARAYS",
                      BoardConfig::DISPLAY_WIDTH / 2, 78, 2);
-  drawFooter("YLOS/ALAS VAIHTAA  OIKEA HYVAKSYY", textColor_);
+  drawFooter("VASEN: PALAA", "YLOS/ALAS: VAIHDA", "OIKEA: HYVAKSY",
+             textColor_);
 }
 
 void DisplayView::showBasicView(const core::DisplayModel& model) {
@@ -744,7 +761,7 @@ void DisplayView::showFinishResult(
   canvas_.setTextColor(textColor_, DISPLAY_BACKGROUND_COLOR);
   canvas_.drawString(pointsText, BoardConfig::DISPLAY_WIDTH / 2,
                      BoardConfig::DISPLAY_HEIGHT * 65 / 100, 2);
-  drawFooter("VASEN/OIKEA PALAA", textColor_);
+  drawFooter("VASEN: PALAA", "", "OIKEA: PALAA", textColor_);
 }
 
 void DisplayView::showTimeEntry(const core::TimeEntryDisplayModel& model) {
@@ -766,7 +783,7 @@ void DisplayView::showTimeEntry(const core::TimeEntryDisplayModel& model) {
   canvas_.setTextDatum(MC_DATUM);
   canvas_.setTextColor(textColor_, DISPLAY_BACKGROUND_COLOR);
   canvas_.drawString(value, centerX, valueY, 2);
-  drawFooter("YLOS/ALAS MUUTTAA  OIKEA JATKAA", textColor_);
+  drawFooter("", "YLOS/ALAS: MUUTA", "OIKEA: JATKA", textColor_);
 }
 
 void DisplayView::showMenu(const core::MenuDisplayModel& model) {
@@ -833,7 +850,7 @@ void DisplayView::showCalibration(
   if (model.saveFailed)
     canvas_.drawString("TALLENNUSVIRHE", BoardConfig::DISPLAY_WIDTH / 2,
                        118, 2);
-  drawFooter("YLOS/ALAS +/-1  VASEN PERU  OIKEA OK", textColor_);
+  drawFooter("VASEN: PERU", "YLOS/ALAS: +/-1", "OIKEA: OK", textColor_);
 }
 
 void DisplayView::showOrder(const core::OrderDisplayModel& model) {
@@ -962,9 +979,15 @@ void DisplayView::showOrder(const core::OrderDisplayModel& model) {
                      BoardConfig::DISPLAY_HEIGHT * 46 / 100, 2);
   canvas_.setTextSize(BoardConfig::DISPLAY_WIDTH >= 480 ? 2 : 1);
   canvas_.setTextColor(textColor_, DISPLAY_BACKGROUND_COLOR);
-  if (editor.phase != route::EditorPhase::COMPETITION_TYPE) {
-    drawFooter(editor.saveFailed ? "TALLENNUSVIRHE"
-                                 : "YLOS/ALAS  VASEN  OIKEA",
+  if (editor.saveFailed) {
+    drawFooter("", "TALLENNUSVIRHE", "", textColor_);
+  } else if (editor.phase == route::EditorPhase::BROWSE) {
+    drawFooter("VASEN: PALAA", "YLOS/ALAS: SELAA", "OIKEA: MUOKKAA",
+               textColor_);
+  } else if (editor.phase == route::EditorPhase::CANCEL_PROMPT) {
+    drawFooter("VASEN: EI", "", "OIKEA: KYLLA", textColor_);
+  } else if (editor.phase != route::EditorPhase::SAVE_PENDING) {
+    drawFooter("VASEN: TAKAISIN", "YLOS/ALAS: MUUTA", "OIKEA: JATKA",
                textColor_);
   }
 }
@@ -1027,7 +1050,7 @@ void DisplayView::showDiagnostics(
   std::snprintf(line, sizeof(line), "KULUNUT %" PRIu64 " ms",
                 model.clockElapsedMilliseconds);
   canvas_.drawString(line, 4, y, 1);
-  drawFooter("VASEN PALAA", textColor_);
+  drawFooter("VASEN: PALAA", "", "", textColor_);
 }
 
 }  // namespace ui

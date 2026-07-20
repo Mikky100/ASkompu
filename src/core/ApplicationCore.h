@@ -155,7 +155,7 @@ class ApplicationCore {
   bool finishResultDismissed_ = false;
   domain::RouteOrder currentRouteOrder_;
   route::RouteOrderEditor routeOrderEditor_;
-  OrderAccessAction orderAccessAction_ = OrderAccessAction::Edit;
+  OrderAccessAction orderAccessAction_ = OrderAccessAction::Replace;
   Screen screen_ = Screen::StartupTimeEntry;
   MenuPage menuPage_ = MenuPage::Main;
   uint8_t mainMenuSelectedIndex_ = 0;

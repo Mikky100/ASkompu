@@ -629,6 +629,11 @@ void testMannedJatUsesRightAndPointIsIgnoredDuringStartEdit() {
   press(app, core::ButtonId::Right);
   TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(domain::CompetitionState::WAIT_START),
                           static_cast<uint8_t>(app.competition().state()));
+  const core::CompetitionDisplayModel waiting =
+      app.displayModel().competition;
+  TEST_ASSERT_FALSE(waiting.hasCurrentSegment);
+  TEST_ASSERT_TRUE(waiting.hasNextSegment);
+  TEST_ASSERT_EQUAL_UINT32(20, waiting.nextSegment.value);
   TEST_ASSERT_EQUAL_size_t(1, app.competition().stageResults().size());
 }
 
@@ -1306,9 +1311,10 @@ void testWaitStartOrderMenuPromptsEditOrReplace() {
       static_cast<uint8_t>(core::Screen::OrderAccessPrompt),
       static_cast<uint8_t>(editApp.screen()));
   TEST_ASSERT_EQUAL_UINT8(
-      static_cast<uint8_t>(core::OrderAccessAction::Edit),
+      static_cast<uint8_t>(core::OrderAccessAction::Replace),
       static_cast<uint8_t>(
           editApp.displayModel().orderAccess.selectedAction));
+  press(editApp, core::ButtonId::Down);
   press(editApp, core::ButtonId::Right);
   TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(core::Screen::OrderEdit),
                           static_cast<uint8_t>(editApp.screen()));
@@ -1325,9 +1331,10 @@ void testWaitStartOrderMenuPromptsEditOrReplace() {
   press(replaceApp, core::ButtonId::Right);
   press(replaceApp, core::ButtonId::Down);
   TEST_ASSERT_EQUAL_UINT8(
-      static_cast<uint8_t>(core::OrderAccessAction::Replace),
+      static_cast<uint8_t>(core::OrderAccessAction::Edit),
       static_cast<uint8_t>(
           replaceApp.displayModel().orderAccess.selectedAction));
+  press(replaceApp, core::ButtonId::Up);
   press(replaceApp, core::ButtonId::Right);
   TEST_ASSERT_EQUAL_UINT8(
       static_cast<uint8_t>(route::EditorPhase::COMPETITION_TYPE),

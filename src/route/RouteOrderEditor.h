@@ -58,6 +58,7 @@ class RouteOrderEditor {
   EditorResult finishWorkingSegment(domain::PointType pointType);
   void adjustValue(int8_t direction);
   uint8_t digitCount() const;
+  bool canSelectMittis() const;
 
   domain::RouteOrder draft_;
   domain::SegmentDefinition working_;

@@ -33,7 +33,8 @@ class DisplayView : public DisplayPort {
   void showOrderAccess(const core::OrderAccessDisplayModel& model);
   void showOrder(const core::OrderDisplayModel& model);
   void showDiagnostics(const core::DiagnosticsDisplayModel& model);
-  void drawFooter(const char* text, uint16_t color = TFT_LIGHTGREY);
+  void drawFooter(const char* left, const char* upDown, const char* right,
+                  uint16_t color);
 
   TFT_eSPI display_;
   TFT_eSprite canvas_;
@@ -43,6 +44,7 @@ class DisplayView : public DisplayPort {
   uint32_t menuRowsFingerprint_ = 0;
   uint16_t textColor_ = TFT_WHITE;
   uint8_t backlightPercent_ = domain::DEFAULT_BACKLIGHT_PERCENT;
+  bool showLabels_ = true;
   bool spriteReady_ = false;
   bool hasRendered_ = false;
 };
