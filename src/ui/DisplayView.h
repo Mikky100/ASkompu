@@ -13,6 +13,7 @@ class DisplayView : public DisplayPort {
   DisplayView();
   bool begin() override;
   void setBacklight(bool enabled) override;
+  void setBacklightPercent(uint8_t percent);
   uint16_t width() const override;
   uint16_t height() const override;
   void render(const core::DisplayModel& model) override;
@@ -41,6 +42,7 @@ class DisplayView : public DisplayPort {
   uint32_t menuTitleFingerprint_ = 0;
   uint32_t menuRowsFingerprint_ = 0;
   uint16_t textColor_ = TFT_WHITE;
+  uint8_t backlightPercent_ = domain::DEFAULT_BACKLIGHT_PERCENT;
   bool spriteReady_ = false;
   bool hasRendered_ = false;
 };

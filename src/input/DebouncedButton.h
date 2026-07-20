@@ -10,7 +10,8 @@ class DebouncedButton {
  public:
   DebouncedButton(uint8_t pin, uint8_t activeLevel, uint32_t debounceMs,
                   uint32_t longPressDelayMs = 0,
-                  uint32_t repeatIntervalMs = 0);
+                  uint32_t repeatIntervalMs = 0,
+                  uint32_t minimumPressIntervalMs = 150);
 
   void begin();
   void update(uint32_t nowMs);

@@ -256,6 +256,33 @@ void testJatValidationByCompetitionType() {
       static_cast<uint8_t>(domain::validateRouteOrder(order)));
 }
 
+void testNonEmitJatSkipsOnlyChoiceAndReturnsToContinuation() {
+  route::RouteOrderEditor editor;
+  editor.beginCreate();
+  editor.handle(route::EditorKey::RIGHT);  // NON-EMIT
+  editor.handle(route::EditorKey::RIGHT);  // hour -> minute
+  editor.handle(route::EditorKey::RIGHT);  // start time
+  editor.handle(route::EditorKey::RIGHT);  // TIME value
+  editor.handle(route::EditorKey::RIGHT);
+  editor.handle(route::EditorKey::RIGHT);
+  editor.handle(route::EditorKey::RIGHT);
+  editor.handle(route::EditorKey::UP);     // 00:01
+  editor.handle(route::EditorKey::RIGHT);  // continuation
+  editor.handle(route::EditorKey::DOWN);   // JAT
+  editor.handle(route::EditorKey::RIGHT);
+
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(route::EditorPhase::JAT_OFFSET),
+      static_cast<uint8_t>(editor.view().phase));
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(domain::JatType::MANNED_JAT),
+                          static_cast<uint8_t>(editor.view().jatType));
+
+  editor.handle(route::EditorKey::LEFT);
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(route::EditorPhase::CONTINUATION),
+      static_cast<uint8_t>(editor.view().phase));
+}
+
 void testMittisRangeAndForcedFollowingTimeSegment() {
   domain::RouteOrder order;
   domain::SegmentDefinition mittis;
@@ -754,8 +781,7 @@ void testPersistentTextColorSelectionRequest() {
   acceptStartupTime(fixture, 0, 0);
   openMainAt(fixture, 4);
   press(fixture.application, core::ButtonId::Right);  // display menu
-  for (uint8_t index = 0; index < 4; ++index)
-    press(fixture.application, core::ButtonId::Down);
+  press(fixture.application, core::ButtonId::Down);
   press(fixture.application, core::ButtonId::Right);  // text color choices
   press(fixture.application, core::ButtonId::Down);   // red
   press(fixture.application, core::ButtonId::Right);
@@ -767,6 +793,7 @@ void testPersistentTextColorSelectionRequest() {
       static_cast<uint8_t>(domain::TextColor::WHITE),
       static_cast<uint8_t>(fixture.application.displayModel().textColor));
   fixture.application.completeTextColorSave(true);
+  TEST_ASSERT_EQUAL_UINT8(1, fixture.application.menuSelectedIndex());
   TEST_ASSERT_EQUAL_UINT8(
       static_cast<uint8_t>(domain::TextColor::RED),
       static_cast<uint8_t>(fixture.application.displayModel().textColor));
@@ -1076,6 +1103,38 @@ void testButtonInterpreterSuppressesDuplicateBouncePress() {
   TEST_ASSERT_TRUE(interpreter.update(true, 220).pressed);
 }
 
+void testButtonTimestampSlightlyBehindCannotStartLongPress() {
+  input::ButtonInterpreter point(20, 2000, 0, 500);
+  point.reset(false, 900);
+  point.update(true, 1000);
+  TEST_ASSERT_TRUE(point.update(true, 1020).pressed);
+
+  // ISR tick timestamps can lead millis() by a tick. This must not wrap into
+  // an apparent multi-day hold and open the additional-order menu.
+  const input::ButtonTransitions behind = point.update(true, 1019);
+  TEST_ASSERT_FALSE(behind.longStart);
+  TEST_ASSERT_TRUE(point.update(true, 3020).longStart);
+}
+
+void testRightButtonGuardRequiresASeparateSlowPress() {
+  input::ButtonInterpreter right(20, 500, 0, 350);
+  right.reset(false, 0);
+  right.update(true, 0);
+  TEST_ASSERT_TRUE(right.update(true, 20).pressed);
+  right.update(false, 80);
+  TEST_ASSERT_TRUE(right.update(false, 100).shortPress);
+
+  right.update(true, 200);
+  TEST_ASSERT_FALSE(right.update(true, 220).pressed);
+  right.update(false, 260);
+  TEST_ASSERT_FALSE(right.update(false, 280).shortPress);
+
+  right.update(true, 370);
+  TEST_ASSERT_TRUE(right.update(true, 390).pressed);
+  right.update(false, 450);
+  TEST_ASSERT_TRUE(right.update(false, 470).shortPress);
+}
+
 void testMittisStartResetsTripAndFreezesDisplayedTripForTenSeconds() {
   Fixture fixture;
   domain::RouteOrder order;
@@ -1134,10 +1193,11 @@ void testDebugSpeedCanBeEnabledDisabledAndFailureKeepsOldValue() {
   openDebugMenu(fixture);
   TEST_ASSERT_EQUAL_STRING("NOPEUS: POIS",
                            fixture.application.displayModel().menu.rows[0].label);
-  press(fixture.application, core::ButtonId::Right);
+  press(fixture.application, core::ButtonId::Up);
   TEST_ASSERT_EQUAL_STRING("NOPEUS: PAALLA",
                            fixture.application.displayModel().menu.rows[0].label);
   TEST_ASSERT_FALSE(fixture.application.displayModel().showSpeed);
+  press(fixture.application, core::ButtonId::Right);
   domain::DebugDisplaySettings requested;
   TEST_ASSERT_TRUE(
       fixture.application.takeDebugDisplaySettingsSaveRequest(requested));
@@ -1146,17 +1206,21 @@ void testDebugSpeedCanBeEnabledDisabledAndFailureKeepsOldValue() {
       fixture.application.takeDebugDisplaySettingsSaveRequest(requested));
   fixture.application.completeDebugDisplaySettingsSave(false);
   TEST_ASSERT_FALSE(fixture.application.displayModel().showSpeed);
+  press(fixture.application, core::ButtonId::Right);
   TEST_ASSERT_EQUAL_STRING("NOPEUS: POIS",
                            fixture.application.displayModel().menu.rows[0].label);
 
+  press(fixture.application, core::ButtonId::Down);
   press(fixture.application, core::ButtonId::Right);
   TEST_ASSERT_TRUE(
       fixture.application.takeDebugDisplaySettingsSaveRequest(requested));
   fixture.application.completeDebugDisplaySettingsSave(true);
   TEST_ASSERT_TRUE(fixture.application.displayModel().showSpeed);
+  press(fixture.application, core::ButtonId::Right);
   TEST_ASSERT_EQUAL_STRING(
       "NOPEUS: PAALLA", fixture.application.displayModel().menu.rows[0].label);
 
+  press(fixture.application, core::ButtonId::Up);
   press(fixture.application, core::ButtonId::Right);
   TEST_ASSERT_TRUE(
       fixture.application.takeDebugDisplaySettingsSaveRequest(requested));
@@ -1170,11 +1234,55 @@ void testUnchangedDebugSettingDoesNotRequestPersistentWrite() {
   openDebugMenu(fixture);
   domain::DebugDisplaySettings requested;
   press(fixture.application, core::ButtonId::Right);
+  TEST_ASSERT_FALSE(
+      fixture.application.takeDebugDisplaySettingsSaveRequest(requested));
+  press(fixture.application, core::ButtonId::Right);
+  press(fixture.application, core::ButtonId::Up);
+  press(fixture.application, core::ButtonId::Down);
   press(fixture.application, core::ButtonId::Right);
   TEST_ASSERT_FALSE(
       fixture.application.takeDebugDisplaySettingsSaveRequest(requested));
+  press(fixture.application, core::ButtonId::Right);
   TEST_ASSERT_EQUAL_STRING("NOPEUS: POIS",
                            fixture.application.displayModel().menu.rows[0].label);
+}
+
+void testDisplayBrightnessAndLabelsAreEditedThenAccepted() {
+  Fixture fixture;
+  acceptStartupTime(fixture, 0, 0);
+  fixture.application.setInitialDisplaySettings({60, true});
+  openMainAt(fixture, 4);
+  press(fixture.application, core::ButtonId::Right);
+
+  press(fixture.application, core::ButtonId::Right);  // brightness
+  TEST_ASSERT_EQUAL_STRING("KIRKKAUS: 60%",
+                           fixture.application.displayModel().menu.rows[0].label);
+  press(fixture.application, core::ButtonId::Up);
+  TEST_ASSERT_EQUAL_UINT8(70,
+                          fixture.application.displayModel().backlightPercent);
+  domain::DisplaySettings requested;
+  press(fixture.application, core::ButtonId::Right);
+  TEST_ASSERT_TRUE(
+      fixture.application.takeDisplaySettingsSaveRequest(requested));
+  TEST_ASSERT_EQUAL_UINT8(70, requested.backlightPercent);
+  TEST_ASSERT_TRUE(requested.showLabels);
+  fixture.application.completeDisplaySettingsSave(true);
+
+  press(fixture.application, core::ButtonId::Down);
+  press(fixture.application, core::ButtonId::Down);
+  press(fixture.application, core::ButtonId::Right);  // labels
+  press(fixture.application, core::ButtonId::Down);
+  TEST_ASSERT_EQUAL_STRING("SELITTEET: POIS",
+                           fixture.application.displayModel().menu.rows[0].label);
+  press(fixture.application, core::ButtonId::Right);
+  TEST_ASSERT_TRUE(
+      fixture.application.takeDisplaySettingsSaveRequest(requested));
+  TEST_ASSERT_EQUAL_UINT8(70, requested.backlightPercent);
+  TEST_ASSERT_FALSE(requested.showLabels);
+  fixture.application.completeDisplaySettingsSave(true);
+  TEST_ASSERT_EQUAL_UINT8(70,
+                          fixture.application.displayModel().backlightPercent);
+  TEST_ASSERT_FALSE(fixture.application.displayModel().showLabels);
 }
 
 }  // namespace
@@ -1185,6 +1293,7 @@ int main(int, char**) {
   RUN_TEST(testCompetitionTypeIsImmutableAfterSelectionAndDuringEdit);
   RUN_TEST(testRouteOrderValidationOrderValuesAndFinish);
   RUN_TEST(testJatValidationByCompetitionType);
+  RUN_TEST(testNonEmitJatSkipsOnlyChoiceAndReturnsToContinuation);
   RUN_TEST(testMittisRangeAndForcedFollowingTimeSegment);
   RUN_TEST(testEditableRouteOrderValueFormattingKeepsValueKindsSeparate);
   RUN_TEST(testCreationCancelAndValidationFailurePreserveCurrentOrder);
@@ -1227,9 +1336,12 @@ int main(int, char**) {
   RUN_TEST(testButtonDebounceAndLongRepeatSemantics);
   RUN_TEST(testDeferredButtonEdgesPreserveShortPress);
   RUN_TEST(testButtonInterpreterSuppressesDuplicateBouncePress);
+  RUN_TEST(testButtonTimestampSlightlyBehindCannotStartLongPress);
+  RUN_TEST(testRightButtonGuardRequiresASeparateSlowPress);
   RUN_TEST(testMittisStartResetsTripAndFreezesDisplayedTripForTenSeconds);
   RUN_TEST(testDebugSpeedDefaultsOffAndUnknownBitsAreFiltered);
   RUN_TEST(testDebugSpeedCanBeEnabledDisabledAndFailureKeepsOldValue);
   RUN_TEST(testUnchangedDebugSettingDoesNotRequestPersistentWrite);
+  RUN_TEST(testDisplayBrightnessAndLabelsAreEditedThenAccepted);
   return UNITY_END();
 }

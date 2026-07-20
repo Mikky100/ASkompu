@@ -19,7 +19,7 @@ constexpr uint16_t DISPLAY_WIDTH = 480;
 constexpr uint16_t DISPLAY_HEIGHT = 320;
 constexpr uint8_t DISPLAY_ROTATION = 1;
 constexpr bool USE_PSRAM_SPRITE = true;
-constexpr uint32_t DISPLAY_UPDATE_INTERVAL_MS = 100;
+constexpr uint32_t DISPLAY_UPDATE_INTERVAL_MS = 50;
 
 constexpr uint8_t PIN_BUTTON_LEFT = Esp32S3Ili9488Pins::BUTTON_LEFT;
 constexpr uint8_t PIN_BUTTON_UP = Esp32S3Ili9488Pins::BUTTON_UP;

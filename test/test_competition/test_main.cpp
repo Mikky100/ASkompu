@@ -238,7 +238,8 @@ void testJatCompletesStageAtomically() {
                           static_cast<uint8_t>(engine.pointReleased(
                               5000, 1000, {12, 0, 5}, {})));
   TEST_ASSERT_EQUAL_UINT16(1, engine.currentSegmentIndex());
-  TEST_ASSERT_EQUAL_INT64(delta, engine.deltaMs());
+  TEST_ASSERT_EQUAL_INT64(0, engine.deltaMs());
+  TEST_ASSERT_EQUAL_INT64(delta, engine.finalDeltaMs());
   TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(domain::CompetitionState::JAT_RESULT),
                           static_cast<uint8_t>(engine.state()));
   TEST_ASSERT_TRUE(engine.deltaFrozen());
@@ -320,6 +321,15 @@ void testJatAcceptedFutureAndPastStartTimes() {
   TEST_ASSERT_TRUE(future.acceptNextStageStart(
       {12, 1, 0}, 12UL * 3600UL * 1000UL, 0));
   TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(domain::CompetitionState::WAIT_START),
+                          static_cast<uint8_t>(future.state()));
+  TEST_ASSERT_EQUAL_INT64(0, future.deltaMs());
+  TEST_ASSERT_EQUAL_INT64(0, future.realTimeMs());
+  future.tick(59000);
+  TEST_ASSERT_EQUAL_INT64(0, future.deltaMs());
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(domain::CompetitionState::WAIT_START),
+                          static_cast<uint8_t>(future.state()));
+  future.tick(60000);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(domain::CompetitionState::RUNNING),
                           static_cast<uint8_t>(future.state()));
 
   domain::CompetitionEngine past;

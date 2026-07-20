@@ -177,6 +177,8 @@ struct DiagnosticsDisplayModel {
 struct DisplayModel {
   Screen screen;
   domain::TextColor textColor;
+  uint8_t backlightPercent;
+  bool showLabels;
   ClockTime clock;
   float speedKmh;
   bool showSpeed;

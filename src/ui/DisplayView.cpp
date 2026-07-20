@@ -11,6 +11,21 @@
 namespace ui {
 namespace {
 
+// The verified ILI9488 module needs panel inversion for clean RGB levels.
+// Compensate for that inversion in the framebuffer so the physical colors
+// still match the user-facing setting and the physical background stays black.
+#ifdef ASKOMPU_BOARD_ILI9488_MAIN
+constexpr uint16_t DISPLAY_BACKGROUND_COLOR = TFT_WHITE;
+constexpr uint16_t DISPLAY_RED = TFT_CYAN;
+constexpr uint16_t DISPLAY_GREEN = TFT_MAGENTA;
+constexpr uint16_t DISPLAY_WHITE = TFT_BLACK;
+#else
+constexpr uint16_t DISPLAY_BACKGROUND_COLOR = TFT_BLACK;
+constexpr uint16_t DISPLAY_RED = TFT_RED;
+constexpr uint16_t DISPLAY_GREEN = TFT_GREEN;
+constexpr uint16_t DISPLAY_WHITE = TFT_WHITE;
+#endif
+
 void formatTrip(char* text, size_t size, int64_t distanceMm) {
   const bool negative = distanceMm < 0;
   const uint64_t magnitude = negative
@@ -121,30 +136,47 @@ bool sameSegment(const domain::SegmentDefinition& first,
          first.jatOffsetMinutes == second.jatOffsetMinutes;
 }
 
-bool sameCompetition(const core::CompetitionDisplayModel& first,
-                     const core::CompetitionDisplayModel& second) {
-  return first.state == second.state &&
-         first.deltaSeconds == second.deltaSeconds &&
-         first.deltaFrozen == second.deltaFrozen &&
-         first.hasCurrentSegment == second.hasCurrentSegment &&
-         first.hasNextSegment == second.hasNextSegment &&
-         first.undoPromptVisible == second.undoPromptVisible &&
-         (!first.hasCurrentSegment ||
-          sameSegment(first.currentSegment, second.currentSegment)) &&
-         (!first.hasNextSegment ||
-          sameSegment(first.nextSegment, second.nextSegment));
+bool currentSegmentChanged(const core::CompetitionDisplayModel& first,
+                           const core::CompetitionDisplayModel& second) {
+  return first.hasCurrentSegment != second.hasCurrentSegment ||
+         (first.hasCurrentSegment &&
+          !sameSegment(first.currentSegment, second.currentSegment));
 }
 
-bool sameAtOverlay(const core::AtOverlayDisplayModel& first,
-                   const core::AtOverlayDisplayModel& second) {
-  return first.visible == second.visible &&
-         first.clockTime.hour == second.clockTime.hour &&
-         first.clockTime.minute == second.clockTime.minute &&
-         first.clockTime.second == second.clockTime.second &&
-         first.waitingForStop == second.waitingForStop &&
-         first.travelledDistanceMillimeters ==
-             second.travelledDistanceMillimeters &&
-         first.targetDistanceMeters == second.targetDistanceMeters;
+bool nextSegmentChanged(const core::CompetitionDisplayModel& first,
+                        const core::CompetitionDisplayModel& second) {
+  return first.hasNextSegment != second.hasNextSegment ||
+         (first.hasNextSegment &&
+          !sameSegment(first.nextSegment, second.nextSegment));
+}
+
+bool deltaChanged(const core::DisplayModel& first,
+                  const core::DisplayModel& second) {
+  return first.competition.state != second.competition.state ||
+         first.competition.deltaSeconds != second.competition.deltaSeconds ||
+         first.competition.deltaFrozen != second.competition.deltaFrozen ||
+         first.atOverlay.visible != second.atOverlay.visible ||
+         (second.atOverlay.visible &&
+          (first.atOverlay.clockTime.hour != second.atOverlay.clockTime.hour ||
+           first.atOverlay.clockTime.minute != second.atOverlay.clockTime.minute ||
+           first.atOverlay.clockTime.second != second.atOverlay.clockTime.second));
+}
+
+WidgetRect deltaTransferRect(const DisplayLayout& layout) {
+  const int16_t height = layout.height >= 300 ? 104 : layout.delta.height;
+  return {layout.delta.x,
+          static_cast<int16_t>(layout.delta.y +
+                               (layout.delta.height - height) / 2),
+          layout.delta.width, height};
+}
+
+void clearRect(TFT_eSprite& canvas, const WidgetRect& rect) {
+  canvas.fillRect(rect.x, rect.y, rect.width, rect.height,
+                  DISPLAY_BACKGROUND_COLOR);
+}
+
+void pushRect(TFT_eSprite& canvas, const WidgetRect& rect) {
+  canvas.pushSprite(rect.x, rect.y, rect.x, rect.y, rect.width, rect.height);
 }
 
 }  // namespace
@@ -166,14 +198,14 @@ bool DisplayView::begin() {
   spriteReady_ = canvas_.createSprite(BoardConfig::DISPLAY_WIDTH,
                                       BoardConfig::DISPLAY_HEIGHT) != nullptr;
   if (!spriteReady_) {
-    display_.fillScreen(TFT_BLACK);
-    display_.setTextColor(TFT_RED, TFT_BLACK);
+    display_.fillScreen(DISPLAY_BACKGROUND_COLOR);
+    display_.setTextColor(DISPLAY_RED, DISPLAY_BACKGROUND_COLOR);
     display_.setTextDatum(MC_DATUM);
     display_.drawString("DISPLAY BUFFER ERROR", BoardConfig::DISPLAY_WIDTH / 2,
                         BoardConfig::DISPLAY_HEIGHT / 2, 2);
     return false;
   }
-  canvas_.fillSprite(TFT_BLACK);
+  canvas_.fillSprite(DISPLAY_BACKGROUND_COLOR);
   canvas_.pushSprite(0, 0);
   return true;
 }
@@ -181,7 +213,27 @@ bool DisplayView::begin() {
 void DisplayView::setBacklight(bool enabled) {
 #if defined(TFT_BL)
   pinMode(TFT_BL, OUTPUT);
-  digitalWrite(TFT_BL, enabled ? TFT_BACKLIGHT_ON : !TFT_BACKLIGHT_ON);
+  if (enabled) {
+    setBacklightPercent(backlightPercent_);
+  } else {
+    analogWrite(TFT_BL, TFT_BACKLIGHT_ON == HIGH ? 0 : 255);
+  }
+#endif
+}
+
+void DisplayView::setBacklightPercent(uint8_t percent) {
+#if defined(TFT_BL)
+  if (percent < domain::MIN_BACKLIGHT_PERCENT)
+    percent = domain::MIN_BACKLIGHT_PERCENT;
+  if (percent > domain::MAX_BACKLIGHT_PERCENT)
+    percent = domain::MAX_BACKLIGHT_PERCENT;
+  backlightPercent_ = percent;
+  const uint8_t duty = static_cast<uint8_t>(
+      (static_cast<uint16_t>(percent) * 255U + 50U) / 100U);
+  pinMode(TFT_BL, OUTPUT);
+  analogWrite(TFT_BL, TFT_BACKLIGHT_ON == HIGH ? duty : 255U - duty);
+#else
+  (void)percent;
 #endif
 }
 
@@ -191,23 +243,25 @@ uint16_t DisplayView::height() const { return BoardConfig::DISPLAY_HEIGHT; }
 void DisplayView::drawFooter(const char* text, uint16_t color) {
   canvas_.setTextDatum(BC_DATUM);
   canvas_.setTextSize(BoardConfig::DISPLAY_WIDTH >= 480 ? 2 : 1);
-  canvas_.setTextColor(color, TFT_BLACK);
+  canvas_.setTextColor(color, DISPLAY_BACKGROUND_COLOR);
   canvas_.drawString(text, BoardConfig::DISPLAY_WIDTH / 2,
                      BoardConfig::DISPLAY_HEIGHT - 6, 1);
 }
 
 void DisplayView::render(const core::DisplayModel& model) {
   if (!spriteReady_) return;
+  if (!hasRendered_ || backlightPercent_ != model.backlightPercent)
+    setBacklightPercent(model.backlightPercent);
   switch (model.textColor) {
     case domain::TextColor::RED:
-      textColor_ = TFT_RED;
+      textColor_ = DISPLAY_RED;
       break;
     case domain::TextColor::GREEN:
-      textColor_ = TFT_GREEN;
+      textColor_ = DISPLAY_GREEN;
       break;
     case domain::TextColor::WHITE:
     default:
-      textColor_ = TFT_WHITE;
+      textColor_ = DISPLAY_WHITE;
       break;
   }
   const bool sameScreen = hasRendered_ && renderedScreen_ == model.screen;
@@ -221,23 +275,23 @@ void DisplayView::render(const core::DisplayModel& model) {
     if (lastModel_.trip1.distanceMillimeters !=
         model.trip1.distanceMillimeters)
       canvas_.fillRect(layout.trip1.x, layout.trip1.y, layout.trip1.width,
-                       layout.trip1.height, TFT_BLACK);
+                       layout.trip1.height, DISPLAY_BACKGROUND_COLOR);
     if (!sameClock(lastModel_.clock, model.clock))
       canvas_.fillRect(layout.clock.x, layout.clock.y, layout.clock.width,
-                       layout.clock.height, TFT_BLACK);
-    if (!sameCompetition(lastModel_.competition, model.competition) ||
-        !sameAtOverlay(lastModel_.atOverlay, model.atOverlay)) {
-      canvas_.fillRect(0, layout.currentSegment.y, BoardConfig::DISPLAY_WIDTH,
-                       BoardConfig::DISPLAY_HEIGHT - layout.currentSegment.y,
-                       TFT_BLACK);
-    } else if (lastModel_.showSpeed != model.showSpeed ||
-               lastModel_.speedKmh != model.speedKmh) {
-      canvas_.fillRect(layout.debugSpeed.x, layout.debugSpeed.y,
-                       layout.debugSpeed.width, layout.debugSpeed.height,
-                       TFT_BLACK);
-    }
+                       layout.clock.height, DISPLAY_BACKGROUND_COLOR);
+    if (currentSegmentChanged(lastModel_.competition, model.competition))
+      clearRect(canvas_, layout.currentSegment);
+    if (deltaChanged(lastModel_, model))
+      clearRect(canvas_, deltaTransferRect(layout));
+    if (nextSegmentChanged(lastModel_.competition, model.competition))
+      clearRect(canvas_, layout.nextSegment);
+    if (lastModel_.showSpeed != model.showSpeed ||
+        lastModel_.speedKmh != model.speedKmh ||
+        lastModel_.competition.undoPromptVisible !=
+            model.competition.undoPromptVisible)
+      clearRect(canvas_, layout.debugSpeed);
   } else {
-    canvas_.fillSprite(TFT_BLACK);
+    canvas_.fillSprite(DISPLAY_BACKGROUND_COLOR);
   }
   canvas_.setTextSize(1);
   switch (model.screen) {
@@ -326,17 +380,17 @@ void DisplayView::render(const core::DisplayModel& model) {
                            layout.clock.y, layout.clock.width,
                            layout.clock.height);
       }
-      if (!sameCompetition(lastModel_.competition, model.competition) ||
-          !sameAtOverlay(lastModel_.atOverlay, model.atOverlay)) {
-        const int16_t top = layout.currentSegment.y;
-        canvas_.pushSprite(0, top, 0, top, BoardConfig::DISPLAY_WIDTH,
-                           BoardConfig::DISPLAY_HEIGHT - top);
-      } else if (model.showSpeed &&
-                 lastModel_.speedKmh != model.speedKmh) {
-        canvas_.pushSprite(layout.debugSpeed.x, layout.debugSpeed.y,
-                           layout.debugSpeed.x, layout.debugSpeed.y,
-                           layout.debugSpeed.width, layout.debugSpeed.height);
-      }
+      if (currentSegmentChanged(lastModel_.competition, model.competition))
+        pushRect(canvas_, layout.currentSegment);
+      if (deltaChanged(lastModel_, model))
+        pushRect(canvas_, deltaTransferRect(layout));
+      if (nextSegmentChanged(lastModel_.competition, model.competition))
+        pushRect(canvas_, layout.nextSegment);
+      if (lastModel_.showSpeed != model.showSpeed ||
+          (model.showSpeed && lastModel_.speedKmh != model.speedKmh) ||
+          lastModel_.competition.undoPromptVisible !=
+              model.competition.undoPromptVisible)
+        pushRect(canvas_, layout.debugSpeed);
     }
   } else if (model.screen == core::Screen::StartupTimeEntry ||
              model.screen == core::Screen::TimeEdit) {
@@ -345,7 +399,9 @@ void DisplayView::render(const core::DisplayModel& model) {
     canvas_.pushSprite(0, top, 0, top, BoardConfig::DISPLAY_WIDTH,
                        bottom - top);
   } else if (model.screen == core::Screen::OrderEdit) {
-    if (lastModel_.order.editor.phase != model.order.editor.phase) {
+    if (lastModel_.order.editor.phase != model.order.editor.phase ||
+        lastModel_.order.editor.enteringMittisTime !=
+            model.order.editor.enteringMittisTime) {
       canvas_.pushSprite(0, 0);
     } else {
       const int16_t top = BoardConfig::DISPLAY_WIDTH >= 480 ? 80 : 40;
@@ -404,16 +460,16 @@ void DisplayView::showResultView(const core::ResultViewDisplayModel& model) {
     }
   }
   canvas_.setTextDatum(TC_DATUM);
-  canvas_.setTextColor(TFT_CYAN, TFT_BLACK);
+  canvas_.setTextColor(textColor_, DISPLAY_BACKGROUND_COLOR);
   canvas_.drawString(title, BoardConfig::DISPLAY_WIDTH / 2, 8, 2);
   canvas_.setTextDatum(MC_DATUM);
   canvas_.setTextSize(2);
-  canvas_.setTextColor(textColor_, TFT_BLACK);
+  canvas_.setTextColor(textColor_, DISPLAY_BACKGROUND_COLOR);
   canvas_.drawString(line1, BoardConfig::DISPLAY_WIDTH / 2, 72, 2);
   if (model.type != core::ResultViewType::StageResults)
     canvas_.setTextSize(1);
   canvas_.drawString(line2, BoardConfig::DISPLAY_WIDTH / 2, 112, 2);
-  canvas_.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+  canvas_.setTextColor(textColor_, DISPLAY_BACKGROUND_COLOR);
   if (model.itemCount > 1) {
     char position[20];
     std::snprintf(position, sizeof(position), "%u/%u",
@@ -426,11 +482,11 @@ void DisplayView::showResultView(const core::ResultViewDisplayModel& model) {
 void DisplayView::showOverrideMenu(
     const core::OverrideMenuDisplayModel& model) {
   canvas_.setTextDatum(TC_DATUM);
-  canvas_.setTextColor(TFT_CYAN, TFT_BLACK);
+  canvas_.setTextColor(textColor_, DISPLAY_BACKGROUND_COLOR);
   canvas_.drawString("KILPAILUMUUTOS", BoardConfig::DISPLAY_WIDTH / 2, 10, 2);
   canvas_.setTextDatum(MC_DATUM);
   canvas_.setTextSize(2);
-  canvas_.setTextColor(textColor_, TFT_BLACK);
+  canvas_.setTextColor(textColor_, DISPLAY_BACKGROUND_COLOR);
   canvas_.drawString(
       model.selectedAction == core::OverrideMenuAction::AdditionalOrder
           ? "LISAMAARAYS"
@@ -456,15 +512,15 @@ void DisplayView::showOverrideEdit(
                   model.endPointIndex);
   }
   canvas_.setTextDatum(TC_DATUM);
-  canvas_.setTextColor(TFT_CYAN, TFT_BLACK);
+  canvas_.setTextColor(textColor_, DISPLAY_BACKGROUND_COLOR);
   canvas_.drawString(title, BoardConfig::DISPLAY_WIDTH / 2, 10, 2);
   canvas_.setTextDatum(MC_DATUM);
   canvas_.setTextSize(2);
-  canvas_.setTextColor(model.invalid ? TFT_RED : textColor_, TFT_BLACK);
+  canvas_.setTextColor(textColor_, DISPLAY_BACKGROUND_COLOR);
   canvas_.drawString(value, BoardConfig::DISPLAY_WIDTH / 2, 76, 2);
   canvas_.setTextSize(1);
   if (model.invalid) {
-    canvas_.setTextColor(TFT_RED, TFT_BLACK);
+    canvas_.setTextColor(textColor_, DISPLAY_BACKGROUND_COLOR);
     canvas_.drawString("VALINTA EI KELPAA", BoardConfig::DISPLAY_WIDTH / 2,
                        122, 1);
   }
@@ -479,14 +535,14 @@ void DisplayView::showJatResult(const core::JatResultDisplayModel& model) {
                 model.arrivalClockTime.second);
   formatDelta(delta, sizeof(delta), model.finalDeltaSeconds);
   canvas_.setTextDatum(TC_DATUM);
-  canvas_.setTextColor(TFT_CYAN, TFT_BLACK);
+  canvas_.setTextColor(textColor_, DISPLAY_BACKGROUND_COLOR);
   canvas_.drawString("JAT TULOAIKA", BoardConfig::DISPLAY_WIDTH / 2, 8, 2);
   canvas_.setTextDatum(MC_DATUM);
   canvas_.setTextSize(3);
-  canvas_.setTextColor(textColor_, TFT_BLACK);
+  canvas_.setTextColor(textColor_, DISPLAY_BACKGROUND_COLOR);
   canvas_.drawString(arrival, BoardConfig::DISPLAY_WIDTH / 2, 65, 2);
   canvas_.setTextSize(2);
-  canvas_.setTextColor(TFT_YELLOW, TFT_BLACK);
+  canvas_.setTextColor(textColor_, DISPLAY_BACKGROUND_COLOR);
   canvas_.drawString(delta, BoardConfig::DISPLAY_WIDTH / 2, 118, 2);
   drawFooter("OIKEA JATKAA", textColor_);
 }
@@ -497,11 +553,13 @@ void DisplayView::showStartTimeEdit(
   std::snprintf(value, sizeof(value), "%02u:%02u:00",
                 model.proposedClockTime.hour, model.proposedClockTime.minute);
   canvas_.setTextDatum(TC_DATUM);
-  canvas_.setTextColor(TFT_CYAN, TFT_BLACK);
+  canvas_.setTextColor(textColor_, DISPLAY_BACKGROUND_COLOR);
   canvas_.drawString("SEURAAVA LAHTO", BoardConfig::DISPLAY_WIDTH / 2, 10, 2);
   canvas_.setTextDatum(MC_DATUM);
   canvas_.setTextSize(3);
-  canvas_.setTextColor(model.valueVisible ? textColor_ : TFT_BLACK, TFT_BLACK);
+  canvas_.setTextColor(model.valueVisible ? textColor_
+                                          : DISPLAY_BACKGROUND_COLOR,
+                       DISPLAY_BACKGROUND_COLOR);
   canvas_.drawString(value, BoardConfig::DISPLAY_WIDTH / 2, 75, 2);
   drawFooter(model.acceptsWithPoint
                  ? "YLOS/ALAS +/-1 MIN  PISTE HYVAKSYY"
@@ -518,14 +576,14 @@ void DisplayView::showMittis(const core::MittisDisplayModel& model) {
   else
     std::snprintf(valueText, sizeof(valueText), "MITTAUS EI KELPAA");
   canvas_.setTextDatum(TC_DATUM);
-  canvas_.setTextColor(TFT_CYAN, TFT_BLACK);
+  canvas_.setTextColor(textColor_, DISPLAY_BACKGROUND_COLOR);
   canvas_.drawString("MITTIS KERROIN", BoardConfig::DISPLAY_WIDTH / 2, 10, 2);
   canvas_.setTextDatum(MC_DATUM);
   canvas_.setTextSize(2);
-  canvas_.setTextColor(model.saveFailed ? TFT_RED : textColor_, TFT_BLACK);
+  canvas_.setTextColor(textColor_, DISPLAY_BACKGROUND_COLOR);
   canvas_.drawString(valueText, BoardConfig::DISPLAY_WIDTH / 2, 72, 2);
   canvas_.setTextSize(1);
-  canvas_.setTextColor(model.saveFailed ? TFT_RED : textColor_, TFT_BLACK);
+  canvas_.setTextColor(textColor_, DISPLAY_BACKGROUND_COLOR);
   canvas_.drawString(model.saveFailed ? "TALLENNUSVIRHE - VANHA KERROIN"
                                       : (model.valid ? "VAIHDA?" : "EHDOTUS EI KELPAA"),
                      BoardConfig::DISPLAY_WIDTH / 2, 116, 1);
@@ -537,11 +595,11 @@ void DisplayView::showMittis(const core::MittisDisplayModel& model) {
 void DisplayView::showOrderAccess(const core::OrderAccessDisplayModel& model) {
   const bool edit = model.selectedAction == core::OrderAccessAction::Edit;
   canvas_.setTextDatum(TC_DATUM);
-  canvas_.setTextColor(TFT_CYAN, TFT_BLACK);
+  canvas_.setTextColor(textColor_, DISPLAY_BACKGROUND_COLOR);
   canvas_.drawString("AJOMAARAYS", BoardConfig::DISPLAY_WIDTH / 2, 10, 2);
   canvas_.setTextDatum(MC_DATUM);
   canvas_.setTextSize(2);
-  canvas_.setTextColor(textColor_, TFT_BLACK);
+  canvas_.setTextColor(textColor_, DISPLAY_BACKGROUND_COLOR);
   canvas_.drawString(edit ? "MUOKKAA AJOMAARAYS" : "KORVAA AJOMAARAYS",
                      BoardConfig::DISPLAY_WIDTH / 2, 78, 2);
   drawFooter("YLOS/ALAS VAIHTAA  OIKEA HYVAKSYY", textColor_);
@@ -591,13 +649,15 @@ void DisplayView::showBasicView(const core::DisplayModel& model) {
     return static_cast<int16_t>(rect.y + rect.height / 2);
   };
 
-  canvas_.setTextDatum(TL_DATUM);
-  canvas_.setTextColor(TFT_DARKGREY, TFT_BLACK);
-  canvas_.setTextSize(1);
-  canvas_.drawString("1", layout.trip1.x, layout.trip1.y, 1);
+  if (model.showLabels) {
+    canvas_.setTextDatum(TL_DATUM);
+    canvas_.setTextColor(textColor_, DISPLAY_BACKGROUND_COLOR);
+    canvas_.setTextSize(1);
+    canvas_.drawString("1", layout.trip1.x, layout.trip1.y, 1);
+  }
 
   canvas_.setTextDatum(MC_DATUM);
-  canvas_.setTextColor(textColor_, TFT_BLACK);
+  canvas_.setTextColor(textColor_, DISPLAY_BACKGROUND_COLOR);
   canvas_.setTextSize(layout.topFont.value);
   canvas_.drawString(trip1Text, centerX(layout.trip1), centerY(layout.trip1),
                      layout.topFont.face);
@@ -607,14 +667,25 @@ void DisplayView::showBasicView(const core::DisplayModel& model) {
   if (model.competition.state != domain::CompetitionState::IDLE) {
     canvas_.setTextDatum(MC_DATUM);
     canvas_.setTextSize(layout.deltaFont.value);
-    canvas_.setTextColor(model.competition.deltaFrozen ? TFT_YELLOW : textColor_,
-                         TFT_BLACK);
+    canvas_.setTextColor(textColor_, DISPLAY_BACKGROUND_COLOR);
     canvas_.drawString(model.atOverlay.visible ? atText : deltaText,
                        centerX(layout.delta), centerY(layout.delta),
                        layout.deltaFont.face);
 
     canvas_.setTextSize(layout.segmentFont.value);
-    canvas_.setTextColor(TFT_CYAN, TFT_BLACK);
+    canvas_.setTextColor(textColor_, DISPLAY_BACKGROUND_COLOR);
+    if (model.competition.hasCurrentSegment &&
+        model.competition.currentSegment.pointTypeAtEnd ==
+            domain::PointType::JAT)
+      canvas_.drawString("JAT", centerX(layout.currentSegment),
+                         layout.currentSegment.y + 10,
+                         layout.segmentFont.face);
+    if (model.competition.hasNextSegment &&
+        model.competition.nextSegment.pointTypeAtEnd == domain::PointType::JAT)
+      canvas_.drawString("JAT", centerX(layout.nextSegment),
+                         layout.nextSegment.y + 10,
+                         layout.segmentFont.face);
+    canvas_.setTextColor(textColor_, DISPLAY_BACKGROUND_COLOR);
     canvas_.drawString(currentRange, centerX(layout.currentSegment),
                        layout.currentSegment.y + layout.currentSegment.height / 3,
                        layout.segmentFont.face);
@@ -623,12 +694,12 @@ void DisplayView::showBasicView(const core::DisplayModel& model) {
                        layout.segmentFont.face);
 
     canvas_.setTextSize(layout.segmentValueFont.value);
-    canvas_.setTextColor(textColor_, TFT_BLACK);
+    canvas_.setTextColor(textColor_, DISPLAY_BACKGROUND_COLOR);
     canvas_.drawString(currentValue, centerX(layout.currentSegment),
                        layout.currentSegment.y +
                            (layout.currentSegment.height * 2) / 3,
                        layout.segmentValueFont.face);
-    canvas_.setTextColor(textColor_, TFT_BLACK);
+    canvas_.setTextColor(textColor_, DISPLAY_BACKGROUND_COLOR);
     canvas_.drawString(nextValue, centerX(layout.nextSegment),
                        layout.nextSegment.y +
                            (layout.nextSegment.height * 2) / 3,
@@ -638,14 +709,14 @@ void DisplayView::showBasicView(const core::DisplayModel& model) {
   if (model.showSpeed) {
     canvas_.setTextDatum(ML_DATUM);
     canvas_.setTextSize(layout.debugFont.value);
-    canvas_.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+    canvas_.setTextColor(textColor_, DISPLAY_BACKGROUND_COLOR);
     canvas_.drawString(speedText, layout.debugSpeed.x + 4,
                        centerY(layout.debugSpeed), layout.debugFont.face);
   }
   if (model.competition.undoPromptVisible) {
     canvas_.setTextDatum(MR_DATUM);
     canvas_.setTextSize(layout.debugFont.value);
-    canvas_.setTextColor(textColor_, TFT_BLACK);
+    canvas_.setTextColor(textColor_, DISPLAY_BACKGROUND_COLOR);
     canvas_.drawString("<- = PERU", layout.debugSpeed.right() - 4,
                        centerY(layout.debugSpeed), layout.debugFont.face);
   }
@@ -661,16 +732,16 @@ void DisplayView::showFinishResult(
   std::snprintf(pointsText, sizeof(pointsText), "YHTEENSA %" PRIu64,
                 model.totalPoints);
   canvas_.setTextDatum(TC_DATUM);
-  canvas_.setTextColor(TFT_CYAN, TFT_BLACK);
+  canvas_.setTextColor(textColor_, DISPLAY_BACKGROUND_COLOR);
   canvas_.setTextSize(BoardConfig::DISPLAY_WIDTH >= 480 ? 2 : 1);
   canvas_.drawString("MAALI", BoardConfig::DISPLAY_WIDTH / 2, 8, 2);
   canvas_.setTextDatum(MC_DATUM);
   canvas_.setTextSize(BoardConfig::DISPLAY_WIDTH >= 480 ? 4 : 3);
-  canvas_.setTextColor(textColor_, TFT_BLACK);
+  canvas_.setTextColor(textColor_, DISPLAY_BACKGROUND_COLOR);
   canvas_.drawString(clockText, BoardConfig::DISPLAY_WIDTH / 2,
                      BoardConfig::DISPLAY_HEIGHT * 38 / 100, 2);
   canvas_.setTextSize(BoardConfig::DISPLAY_WIDTH >= 480 ? 3 : 2);
-  canvas_.setTextColor(TFT_YELLOW, TFT_BLACK);
+  canvas_.setTextColor(textColor_, DISPLAY_BACKGROUND_COLOR);
   canvas_.drawString(pointsText, BoardConfig::DISPLAY_WIDTH / 2,
                      BoardConfig::DISPLAY_HEIGHT * 65 / 100, 2);
   drawFooter("VASEN/OIKEA PALAA", textColor_);
@@ -688,12 +759,12 @@ void DisplayView::showTimeEntry(const core::TimeEntryDisplayModel& model) {
   const int16_t valueY = BoardConfig::DISPLAY_HEIGHT * 46 / 100;
   const uint8_t valueScale = BoardConfig::DISPLAY_WIDTH >= 480 ? 4 : 3;
   canvas_.setTextDatum(TC_DATUM);
-  canvas_.setTextColor(TFT_CYAN, TFT_BLACK);
+  canvas_.setTextColor(textColor_, DISPLAY_BACKGROUND_COLOR);
   canvas_.drawString(model.startup ? "ASETA KELLONAIKA" : "MUUTA KELLONAIKA",
                      centerX, 12, 2);
   canvas_.setTextSize(valueScale);
   canvas_.setTextDatum(MC_DATUM);
-  canvas_.setTextColor(textColor_, TFT_BLACK);
+  canvas_.setTextColor(textColor_, DISPLAY_BACKGROUND_COLOR);
   canvas_.drawString(value, centerX, valueY, 2);
   drawFooter("YLOS/ALAS MUUTTAA  OIKEA JATKAA", textColor_);
 }
@@ -704,22 +775,21 @@ void DisplayView::showMenu(const core::MenuDisplayModel& model) {
   const int16_t rowHeight =
       (BoardConfig::DISPLAY_HEIGHT - top - 8) / core::MENU_VISIBLE_ROWS;
   canvas_.setTextDatum(TC_DATUM);
-  canvas_.setTextColor(TFT_CYAN, TFT_BLACK);
+  canvas_.setTextColor(textColor_, DISPLAY_BACKGROUND_COLOR);
   canvas_.setTextSize(large ? 2 : 1);
   canvas_.drawString(model.title, BoardConfig::DISPLAY_WIDTH / 2, 5, 2);
   for (uint8_t row = 0; row < model.visibleRowCount; ++row) {
     const bool selected = row == model.selectedVisibleRow;
-    const uint16_t background = TFT_BLACK;
+    const uint16_t background = DISPLAY_BACKGROUND_COLOR;
     canvas_.fillRect(5, top + row * rowHeight,
                      BoardConfig::DISPLAY_WIDTH - 10, rowHeight - 2,
                      background);
     if (selected) {
       canvas_.fillRect(5, top + row * rowHeight + 5, 5, rowHeight - 12,
-                       TFT_CYAN);
+                       textColor_);
     }
     canvas_.setTextDatum(ML_DATUM);
-    canvas_.setTextColor(model.rows[row].enabled ? textColor_ : TFT_DARKGREY,
-                         background);
+    canvas_.setTextColor(textColor_, background);
     uint8_t textScale = large ? 2 : 1;
     canvas_.setTextSize(textScale);
     while (textScale > 1 &&
@@ -738,12 +808,12 @@ void DisplayView::showMenu(const core::MenuDisplayModel& model) {
   if (model.scrollOffset > 0) {
     const int16_t x = BoardConfig::DISPLAY_WIDTH - 10;
     canvas_.fillTriangle(x, top + 2, x - 6, top + 10, x + 6, top + 10,
-                         TFT_CYAN);
+                         textColor_);
   }
   if (model.scrollOffset + model.visibleRowCount < model.totalRows) {
     const int16_t x = BoardConfig::DISPLAY_WIDTH - 10;
     const int16_t y = BoardConfig::DISPLAY_HEIGHT - 4;
-    canvas_.fillTriangle(x, y, x - 6, y - 8, x + 6, y - 8, TFT_CYAN);
+    canvas_.fillTriangle(x, y, x - 6, y - 8, x + 6, y - 8, textColor_);
   }
 }
 
@@ -753,13 +823,13 @@ void DisplayView::showCalibration(
   std::snprintf(valueText, sizeof(valueText), "%lu mm/pulssi",
                 static_cast<unsigned long>(model.editedMillimetersPerPulse));
   canvas_.setTextDatum(TC_DATUM);
-  canvas_.setTextColor(TFT_CYAN, TFT_BLACK);
+  canvas_.setTextColor(textColor_, DISPLAY_BACKGROUND_COLOR);
   canvas_.drawString("MITTARIKERROIN", BoardConfig::DISPLAY_WIDTH / 2, 10, 2);
   canvas_.setTextDatum(MC_DATUM);
   canvas_.setTextSize(2);
-  canvas_.setTextColor(textColor_, TFT_BLACK);
+  canvas_.setTextColor(textColor_, DISPLAY_BACKGROUND_COLOR);
   canvas_.drawString(valueText, BoardConfig::DISPLAY_WIDTH / 2, 75, 2);
-  canvas_.setTextColor(model.saveFailed ? TFT_RED : textColor_, TFT_BLACK);
+  canvas_.setTextColor(textColor_, DISPLAY_BACKGROUND_COLOR);
   if (model.saveFailed)
     canvas_.drawString("TALLENNUSVIRHE", BoardConfig::DISPLAY_WIDTH / 2,
                        118, 2);
@@ -877,7 +947,7 @@ void DisplayView::showOrder(const core::OrderDisplayModel& model) {
       break;
   }
   canvas_.setTextDatum(TC_DATUM);
-  canvas_.setTextColor(TFT_CYAN, TFT_BLACK);
+  canvas_.setTextColor(textColor_, DISPLAY_BACKGROUND_COLOR);
   canvas_.setTextSize(BoardConfig::DISPLAY_WIDTH >= 480 ? 2 : 1);
   canvas_.drawString(title, BoardConfig::DISPLAY_WIDTH / 2, 10, 2);
   canvas_.setTextDatum(MC_DATUM);
@@ -887,15 +957,15 @@ void DisplayView::showOrder(const core::OrderDisplayModel& model) {
          canvas_.textWidth(primary, 2) > BoardConfig::DISPLAY_WIDTH - 16) {
     canvas_.setTextSize(--primaryScale);
   }
-  canvas_.setTextColor(editor.saveFailed ? TFT_RED : textColor_, TFT_BLACK);
+  canvas_.setTextColor(textColor_, DISPLAY_BACKGROUND_COLOR);
   canvas_.drawString(primary, BoardConfig::DISPLAY_WIDTH / 2,
                      BoardConfig::DISPLAY_HEIGHT * 46 / 100, 2);
   canvas_.setTextSize(BoardConfig::DISPLAY_WIDTH >= 480 ? 2 : 1);
-  canvas_.setTextColor(editor.saveFailed ? TFT_RED : textColor_, TFT_BLACK);
+  canvas_.setTextColor(textColor_, DISPLAY_BACKGROUND_COLOR);
   if (editor.phase != route::EditorPhase::COMPETITION_TYPE) {
     drawFooter(editor.saveFailed ? "TALLENNUSVIRHE"
                                  : "YLOS/ALAS  VASEN  OIKEA",
-               editor.saveFailed ? TFT_RED : textColor_);
+               textColor_);
   }
 }
 
@@ -907,10 +977,10 @@ void DisplayView::showDiagnostics(
   const int16_t lineHeight = large ? 25 : 14;
   int16_t y = large ? 42 : 20;
   canvas_.setTextDatum(TL_DATUM);
-  canvas_.setTextColor(TFT_CYAN, TFT_BLACK);
+  canvas_.setTextColor(textColor_, DISPLAY_BACKGROUND_COLOR);
   canvas_.setTextSize(large ? 2 : 1);
   canvas_.drawString("DIAGNOSTIIKKA", 4, 2, 2);
-  canvas_.setTextColor(textColor_, TFT_BLACK);
+  canvas_.setTextColor(textColor_, DISPLAY_BACKGROUND_COLOR);
   canvas_.setTextSize(scale);
   std::snprintf(line, sizeof(line), "L:%u U:%u D:%u R:%u P:%u",
                 model.buttonPressed[0], model.buttonPressed[1],

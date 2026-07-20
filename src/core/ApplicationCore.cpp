@@ -1,6 +1,7 @@
 #include "ApplicationCore.h"
 
 #include <cstddef>
+#include <cstdio>
 #include <limits>
 
 #include "domain/CalibrationSetting.h"
@@ -54,14 +55,14 @@ constexpr MenuItem MAIN_ITEMS[] = {
 };
 constexpr MenuItem RESULT_ITEMS[] = {{"JAKSOJEN PISTEET", true},
                                      {"TAPAHTUMAT", true}};
-constexpr MenuItem DISPLAY_ITEMS[] = {{"NAYTTOPROFIILI", false},
-                                      {"NAYTTOSELITTEET", false},
-                                      {"AIKAERON MUOTO", false},
-                                      {"TRIP-TARKKUUS", false},
-                                      {"TEKSTIN VARI", true}};
+constexpr MenuItem DISPLAY_ITEMS[] = {{"KIRKKAUS", true},
+                                      {"TEKSTIN VARI", true},
+                                      {"NAYTTOSELITTEET", true}};
 constexpr MenuItem TEXT_COLOR_ITEMS[] = {{"VALKOINEN", true},
                                          {"PUNAINEN", true},
                                          {"VIHREA", true}};
+constexpr MenuItem BRIGHTNESS_ITEMS[] = {{"KIRKKAUS", true}};
+constexpr MenuItem DISPLAY_LABEL_ITEMS[] = {{"SELITTEET", true}};
 constexpr MenuItem TRIP_ITEMS[] = {{"NOLLAA TRIP 1", true},
                                    {"NOLLAA TRIP 2", true},
                                    {"ULKOINEN TRIP", false}};
@@ -94,6 +95,14 @@ const MenuItem* itemsFor(MenuPage page, uint8_t& count, const char*& title) {
       title = "TEKSTIN VARI";
       count = countOf(TEXT_COLOR_ITEMS);
       return TEXT_COLOR_ITEMS;
+    case MenuPage::Brightness:
+      title = "KIRKKAUS";
+      count = countOf(BRIGHTNESS_ITEMS);
+      return BRIGHTNESS_ITEMS;
+    case MenuPage::DisplayLabels:
+      title = "NAYTTOSELITTEET";
+      count = countOf(DISPLAY_LABEL_ITEMS);
+      return DISPLAY_LABEL_ITEMS;
     case MenuPage::Trips:
       title = "TRIPIT";
       count = countOf(TRIP_ITEMS);
@@ -714,6 +723,82 @@ void ApplicationCore::handleBasicView(const ButtonEvent& event) {
 void ApplicationCore::handleMenu(const ButtonEvent& event) {
   const bool step = event.eventType == ButtonEventType::Press ||
                     event.eventType == ButtonEventType::LongRepeat;
+  if (menuPage_ == MenuPage::Brightness) {
+    if (step && event.buttonId == ButtonId::Up) {
+      editedDisplaySettings_.backlightPercent =
+          editedDisplaySettings_.backlightPercent >=
+                  domain::MAX_BACKLIGHT_PERCENT
+              ? domain::MIN_BACKLIGHT_PERCENT
+              : static_cast<uint8_t>(editedDisplaySettings_.backlightPercent +
+                                     domain::BACKLIGHT_STEP_PERCENT);
+    } else if (step && event.buttonId == ButtonId::Down) {
+      editedDisplaySettings_.backlightPercent =
+          editedDisplaySettings_.backlightPercent <=
+                  domain::MIN_BACKLIGHT_PERCENT
+              ? domain::MAX_BACKLIGHT_PERCENT
+              : static_cast<uint8_t>(editedDisplaySettings_.backlightPercent -
+                                     domain::BACKLIGHT_STEP_PERCENT);
+    } else if (event.eventType == ButtonEventType::Press &&
+               event.buttonId == ButtonId::Left) {
+      editedDisplaySettings_ = displaySettings_;
+      openSubmenu(MenuPage::Display);
+    } else if (event.eventType == ButtonEventType::Press &&
+               event.buttonId == ButtonId::Right &&
+               !displaySettingsSaveInFlight_) {
+      if (editedDisplaySettings_.backlightPercent ==
+          displaySettings_.backlightPercent) {
+        openSubmenu(MenuPage::Display);
+      } else {
+        displaySettingsSavePending_ = true;
+      }
+    }
+    return;
+  }
+  if (menuPage_ == MenuPage::DisplayLabels) {
+    if (step && (event.buttonId == ButtonId::Up ||
+                 event.buttonId == ButtonId::Down)) {
+      editedDisplaySettings_.showLabels =
+          !editedDisplaySettings_.showLabels;
+    } else if (event.eventType == ButtonEventType::Press &&
+               event.buttonId == ButtonId::Left) {
+      editedDisplaySettings_ = displaySettings_;
+      openSubmenu(MenuPage::Display);
+      menuSelectedIndex_ = 2;
+    } else if (event.eventType == ButtonEventType::Press &&
+               event.buttonId == ButtonId::Right &&
+               !displaySettingsSaveInFlight_) {
+      if (editedDisplaySettings_.showLabels == displaySettings_.showLabels) {
+        openSubmenu(MenuPage::Display);
+        menuSelectedIndex_ = 2;
+      } else {
+        displaySettingsSavePending_ = true;
+      }
+    }
+    return;
+  }
+  if (menuPage_ == MenuPage::Debug) {
+    if (step && (event.buttonId == ButtonId::Up ||
+                 event.buttonId == ButtonId::Down)) {
+      editedDebugDisplaySettings_.enabledElements ^=
+          static_cast<uint16_t>(domain::DebugDisplayElement::SPEED);
+    } else if (event.eventType == ButtonEventType::Press &&
+               event.buttonId == ButtonId::Left) {
+      editedDebugDisplaySettings_ = debugDisplaySettings_;
+      openSubmenu(MenuPage::System);
+      menuSelectedIndex_ = 1;
+    } else if (event.eventType == ButtonEventType::Press &&
+               event.buttonId == ButtonId::Right &&
+               !debugDisplaySaveInFlight_) {
+      if (editedDebugDisplaySettings_.enabledElements ==
+          debugDisplaySettings_.enabledElements) {
+        openSubmenu(MenuPage::System);
+        menuSelectedIndex_ = 1;
+      } else {
+        debugDisplaySavePending_ = true;
+      }
+    }
+    return;
+  }
   const uint8_t count = menuItemCount();
   if (step && event.buttonId == ButtonId::Up) {
     if (menuSelectedIndex_ > 0) {
@@ -735,8 +820,6 @@ void ApplicationCore::handleMenu(const ButtonEvent& event) {
       screen_ = Screen::BasicView;
     } else if (menuPage_ == MenuPage::TextColor) {
       openSubmenu(MenuPage::Display);
-    } else if (menuPage_ == MenuPage::Debug) {
-      openSubmenu(MenuPage::System);
       menuSelectedIndex_ = 1;
     } else {
       openMainMenu(mainMenuSelectedIndex_);
@@ -883,9 +966,15 @@ void ApplicationCore::activateMenuItem() {
     openSubmenu(PAGES[menuSelectedIndex_ - 3]);
     return;
   }
-  if (menuPage_ == MenuPage::Display && menuSelectedIndex_ == 4) {
+  if (menuPage_ == MenuPage::Display && menuSelectedIndex_ == 0) {
+    editedDisplaySettings_ = displaySettings_;
+    openSubmenu(MenuPage::Brightness);
+  } else if (menuPage_ == MenuPage::Display && menuSelectedIndex_ == 1) {
     openSubmenu(MenuPage::TextColor);
     menuSelectedIndex_ = static_cast<uint8_t>(textColor_);
+  } else if (menuPage_ == MenuPage::Display && menuSelectedIndex_ == 2) {
+    editedDisplaySettings_ = displaySettings_;
+    openSubmenu(MenuPage::DisplayLabels);
   } else if (menuPage_ == MenuPage::TextColor) {
     editedTextColor_ = static_cast<domain::TextColor>(menuSelectedIndex_);
     textColorSavePending_ = true;
@@ -903,14 +992,8 @@ void ApplicationCore::activateMenuItem() {
   } else if (menuPage_ == MenuPage::System && menuSelectedIndex_ == 0) {
     screen_ = Screen::Diagnostics;
   } else if (menuPage_ == MenuPage::System && menuSelectedIndex_ == 1) {
+    editedDebugDisplaySettings_ = debugDisplaySettings_;
     openSubmenu(MenuPage::Debug);
-  } else if (menuPage_ == MenuPage::Debug && menuSelectedIndex_ == 0) {
-    if (debugDisplaySaveInFlight_) return;
-    editedDebugDisplaySettings_.enabledElements ^=
-        static_cast<uint16_t>(domain::DebugDisplayElement::SPEED);
-    debugDisplaySavePending_ =
-        editedDebugDisplaySettings_.enabledElements !=
-        debugDisplaySettings_.enabledElements;
   }
 }
 
@@ -1061,6 +1144,11 @@ DisplayModel ApplicationCore::displayModel() const {
   DisplayModel model{};
   model.screen = screen_;
   model.textColor = textColor_;
+  model.backlightPercent =
+      menuPage_ == MenuPage::Brightness && screen_ == Screen::Menu
+          ? editedDisplaySettings_.backlightPercent
+          : displaySettings_.backlightPercent;
+  model.showLabels = displaySettings_.showLabels;
   model.clock = clock_.isSet() ? clock_.now() : ClockTime{0, 0, 0};
   model.speedKmh = speedCalculator_.speedKmh();
   model.showSpeed = debugDisplaySettings_.enabled(
@@ -1184,6 +1272,16 @@ DisplayModel ApplicationCore::displayModel() const {
                 domain::DebugDisplayElement::SPEED)
                 ? "NOPEUS: PAALLA"
                 : "NOPEUS: POIS";
+      } else if (menuPage_ == MenuPage::Brightness && index == 0) {
+        static char brightnessLabel[24];
+        std::snprintf(brightnessLabel, sizeof(brightnessLabel),
+                      "KIRKKAUS: %u%%",
+                      editedDisplaySettings_.backlightPercent);
+        model.menu.rows[index].label = brightnessLabel;
+      } else if (menuPage_ == MenuPage::DisplayLabels && index == 0) {
+        model.menu.rows[index].label = editedDisplaySettings_.showLabels
+                                           ? "SELITTEET: PAALLA"
+                                           : "SELITTEET: POIS";
       }
     }
   }
@@ -1292,7 +1390,7 @@ void ApplicationCore::completeTextColorSave(bool succeeded) {
   textColorSaveInFlight_ = false;
   if (succeeded) textColor_ = editedTextColor_;
   openSubmenu(MenuPage::Display);
-  menuSelectedIndex_ = 4;
+  menuSelectedIndex_ = 1;
   updateMenuScroll();
 }
 
@@ -1319,7 +1417,35 @@ void ApplicationCore::completeDebugDisplaySettingsSave(bool succeeded) {
   debugDisplaySaveInFlight_ = false;
   if (succeeded) debugDisplaySettings_ = editedDebugDisplaySettings_;
   editedDebugDisplaySettings_ = debugDisplaySettings_;
-  openSubmenu(MenuPage::Debug);
+  openSubmenu(MenuPage::System);
+  menuSelectedIndex_ = 1;
+}
+
+void ApplicationCore::setInitialDisplaySettings(
+    const domain::DisplaySettings& settings) {
+  displaySettings_ = domain::validatedDisplaySettings(settings);
+  editedDisplaySettings_ = displaySettings_;
+}
+
+bool ApplicationCore::takeDisplaySettingsSaveRequest(
+    domain::DisplaySettings& settings) {
+  if (!displaySettingsSavePending_ || displaySettingsSaveInFlight_ ||
+      !domain::isValidDisplaySettings(editedDisplaySettings_))
+    return false;
+  displaySettingsSavePending_ = false;
+  displaySettingsSaveInFlight_ = true;
+  settings = editedDisplaySettings_;
+  return true;
+}
+
+void ApplicationCore::completeDisplaySettingsSave(bool succeeded) {
+  if (!displaySettingsSaveInFlight_) return;
+  displaySettingsSaveInFlight_ = false;
+  if (succeeded) displaySettings_ = editedDisplaySettings_;
+  editedDisplaySettings_ = displaySettings_;
+  const bool labels = menuPage_ == MenuPage::DisplayLabels;
+  openSubmenu(MenuPage::Display);
+  menuSelectedIndex_ = labels ? 2 : 0;
 }
 
 void ApplicationCore::setInitialRouteOrder(const domain::RouteOrder& order,

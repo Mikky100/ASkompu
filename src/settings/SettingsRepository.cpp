@@ -17,6 +17,8 @@ constexpr char EARLY_FACTOR_KEY[] = "earlyFactor";
 constexpr char JAT_RESULT_SECONDS_KEY[] = "jatResultSec";
 constexpr char AT_DISPLAY_DISTANCE_KEY[] = "atDistanceM";
 constexpr char DEBUG_DISPLAY_ELEMENTS_KEY[] = "debugDisplay";
+constexpr char BACKLIGHT_PERCENT_KEY[] = "backlight";
+constexpr char SHOW_LABELS_KEY[] = "showLabels";
 
 }  // namespace
 
@@ -201,6 +203,47 @@ bool SettingsRepository::saveDebugDisplaySettings(
   if (ok)
     ok = preferences.putUShort(DEBUG_DISPLAY_ELEMENTS_KEY,
                                validated.enabledElements) == sizeof(uint16_t);
+  preferences.end();
+  return ok;
+}
+
+DisplaySettingsLoadResult SettingsRepository::loadDisplaySettings() const {
+  Preferences preferences;
+  if (!preferences.begin(PREFERENCES_NAMESPACE, true))
+    return {domain::DisplaySettings{}, true};
+  const bool validSchema =
+      preferences.getUShort(SCHEMA_VERSION_KEY, 0) ==
+      CalibrationConfig::SETTINGS_SCHEMA_VERSION;
+  domain::DisplaySettings loaded;
+  loaded.backlightPercent = preferences.getUChar(
+      BACKLIGHT_PERCENT_KEY, domain::DEFAULT_BACKLIGHT_PERCENT);
+  loaded.showLabels = preferences.getBool(SHOW_LABELS_KEY, true);
+  preferences.end();
+  const domain::DisplaySettings validated =
+      domain::validatedDisplaySettings(loaded);
+  return {validSchema ? validated : domain::DisplaySettings{},
+          !validSchema || !domain::isValidDisplaySettings(loaded)};
+}
+
+bool SettingsRepository::saveDisplaySettings(
+    const domain::DisplaySettings& settings) const {
+  if (!domain::isValidDisplaySettings(settings)) return false;
+  Preferences preferences;
+  if (!preferences.begin(PREFERENCES_NAMESPACE, false)) return false;
+  bool ok = true;
+  if (preferences.getUShort(SCHEMA_VERSION_KEY, 0) !=
+      CalibrationConfig::SETTINGS_SCHEMA_VERSION)
+    ok = preferences.putUShort(SCHEMA_VERSION_KEY,
+                               CalibrationConfig::SETTINGS_SCHEMA_VERSION) ==
+         sizeof(uint16_t);
+  if (ok && preferences.getUChar(BACKLIGHT_PERCENT_KEY, 0xFF) !=
+                settings.backlightPercent)
+    ok = preferences.putUChar(BACKLIGHT_PERCENT_KEY,
+                              settings.backlightPercent) == sizeof(uint8_t);
+  if (ok && preferences.getBool(SHOW_LABELS_KEY, !settings.showLabels) !=
+                settings.showLabels)
+    ok = preferences.putBool(SHOW_LABELS_KEY, settings.showLabels) ==
+         sizeof(bool);
   preferences.end();
   return ok;
 }

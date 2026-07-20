@@ -5,10 +5,12 @@ namespace input {
 DebouncedButton::DebouncedButton(uint8_t pin, uint8_t activeLevel,
                                  uint32_t debounceMs,
                                  uint32_t longPressDelayMs,
-                                 uint32_t repeatIntervalMs)
+                                 uint32_t repeatIntervalMs,
+                                 uint32_t minimumPressIntervalMs)
     : pin_(pin),
       activeLevel_(activeLevel),
-      interpreter_(debounceMs, longPressDelayMs, repeatIntervalMs) {}
+      interpreter_(debounceMs, longPressDelayMs, repeatIntervalMs,
+                   minimumPressIntervalMs) {}
 
 void DebouncedButton::begin() {
   pinMode(pin_, INPUT_PULLUP);

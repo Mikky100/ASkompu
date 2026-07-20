@@ -19,6 +19,8 @@ enum class MenuPage : uint8_t {
   Results,
   Display,
   TextColor,
+  Brightness,
+  DisplayLabels,
   Trips,
   System,
   Debug,
@@ -54,6 +56,9 @@ class ApplicationCore {
   bool takeDebugDisplaySettingsSaveRequest(
       domain::DebugDisplaySettings& settings);
   void completeDebugDisplaySettingsSave(bool succeeded);
+  void setInitialDisplaySettings(const domain::DisplaySettings& settings);
+  bool takeDisplaySettingsSaveRequest(domain::DisplaySettings& settings);
+  void completeDisplaySettingsSave(bool succeeded);
   bool hasRouteOrder() const { return hasRouteOrder_; }
   const domain::RouteOrder* currentRouteOrder() const {
     return hasRouteOrder_ ? &currentRouteOrder_ : nullptr;
@@ -123,6 +128,10 @@ class ApplicationCore {
   domain::DebugDisplaySettings editedDebugDisplaySettings_{};
   bool debugDisplaySavePending_ = false;
   bool debugDisplaySaveInFlight_ = false;
+  domain::DisplaySettings displaySettings_{};
+  domain::DisplaySettings editedDisplaySettings_{};
+  bool displaySettingsSavePending_ = false;
+  bool displaySettingsSaveInFlight_ = false;
   int64_t trip1DistanceMm_ = 0;
   int64_t trip2DistanceMm_ = 0;
   uint64_t totalPulseCount_ = 0;

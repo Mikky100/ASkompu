@@ -11,7 +11,9 @@ TIME, SPEED and MITTIS calculation, start waiting, normal points, immediate
 point undo, JAT stages, finish, scoring, AT, additional orders and road breaks
 run in RAM. JAT supports `MANNED_JAT`, `EMIT_JAT_OFFSET`, `EMIT_MLA` and
 `EMIT_ULA`, including their start-time proposals and physical stage-distance
-zero points. MITTIS calibration proposals use integer arithmetic and a changed
+zero points. At JAT the completed delta is stored for scoring while the active
+competition clock resets to zero and remains stopped until the accepted next
+start time. MITTIS calibration proposals use integer arithmetic and a changed
 factor affects only future pulses.
 
 At the start of every MITTIS segment, Trip 1 resets. Its displayed value stays
@@ -51,7 +53,8 @@ After time acceptance the basic view shows:
   visual size and selected text color; Trip 2 remains available to the domain,
   diagnostics and reset input but is hidden from the basic view;
 - while a competition is active, current segment, right-aligned delta, and next
-  segment in fixed left/centre/right regions;
+  segment in fixed left/centre/right regions; `JAT` is shown above a current or
+  next segment whose endpoint is a JAT;
 - optional rounded debug speed with `km/h` in its own bottom region.
 
 It contains no `MENU` or `DEV` text, menu hint, GPIO numbers, button states,
@@ -65,9 +68,10 @@ Left returns, Right opens or accepts,
 and a long Left abandons the current non-startup UI operation and returns to the
 basic view.
 
-Button edges are captured by interrupts with 20 ms debounce. A 150 ms accepted
-press guard suppresses a second stable cycle caused by the same physical press.
-A dispatched UI
+Button edges are captured by interrupts with 20 ms debounce. General buttons
+use a 150 ms accepted-press guard. Right uses a stricter 350 ms guard and its
+normal navigation action is dispatched only after a complete stable release,
+so one noisy physical press cannot advance two input fields. A dispatched UI
 event requests an immediate redraw instead of waiting for the periodic display
 refresh. After the finish time and total points are shown, Left or Right returns
 to the normal basic view; the completed competition and its results remain
@@ -84,7 +88,7 @@ workflow; unavailable unrelated items remain visible but dimmed.
 | Kello | Direct clock editing | Implemented |
 | Kerroin | Direct mm/pulse calibration editing | Implemented |
 | Pisteet ja tapahtumat | Jaksojen pisteet, Tapahtumat | Implemented from the current RAM event/result data; stage browsing also shows the total |
-| Näyttöasetukset | Näyttöprofiili, Näyttöselitteet, Aikaeron muoto, Trip-tarkkuus, Tekstin väri | Persistent white/red/green text color works; other rows remain unavailable |
+| Näyttöasetukset | Kirkkaus, Tekstin väri, Näyttöselitteet | Persistent 10...100% PWM brightness, white/red/green text color, and label visibility are implemented |
 | Tripit | Nollaa Trip 1, Nollaa Trip 2, Ulkoinen trip | Both resets work; external display source needs its hardware/protocol adapter |
 | Järjestelmä | Diagnostiikka, Debug, Painikeasetukset, Muut asetukset | Diagnostics and persistent Debug speed work; button/system settings are not implemented |
 
@@ -167,8 +171,8 @@ import adapter.
 - `include/board/` selects one GPIO/display profile from the PlatformIO build
   definition. Missing or conflicting profile definitions stop compilation.
 - `src/settings/` is the only Preferences/NVS adapter. It stores calibration,
-  text color, competition parameters and the versionable Debug bitmask, never
-  wall-clock time.
+  text color, backlight brightness, display-label visibility, competition
+  parameters and the versionable Debug bitmask, never wall-clock time.
 - `src/ui/DisplayPort.h` is the display boundary. `DisplayView` owns TFT_eSPI,
   controller initialization, backlight and sprite rendering, while
   `DisplayLayout.*` provides native-testable 320x170 and 480x320 geometry.
@@ -177,9 +181,13 @@ import adapter.
   unchanged periodic frames produce no SPI transfer, basic-view fields update
   independently, and an unchanged menu page moves only its narrow selection
   marker. The external ILI9488 SPI clock is 40 MHz.
-  Both display profiles normally request basic/competition-view updates every
-  100 ms; the ILI9488 port still transfers only changed cropped regions and
-  avoids clearing the full PSRAM sprite for an ordinary trip-only update.
+  LilyGO normally requests basic/competition-view updates every 100 ms. The
+  ILI9488 profile requests them every 50 ms to make pulse-quantized Trip 1 motion
+  more even, while still transferring only changed cropped regions and avoiding
+  a full PSRAM-sprite clear for an ordinary trip-only update. In competition
+  mode the current segment, delta, next segment, and debug row are invalidated
+  independently; AT's internal travelled-distance updates do not trigger a
+  transfer because that value is not drawn in the basic view.
 - `src/main.cpp` wires the adapters and keeps pulse, button, speed, clock, save,
   and display work non-blocking.
 
@@ -327,7 +335,8 @@ diagnostics.
    fixed positions, no clipping and no overlap at both short and long values.
 6. Verify TIME, SPEED, MITTIS, JAT, AT, finish, result, event, menu and editing
    views, including a missing next segment.
-7. Toggle `JARJESTELMA > DEBUG > NOPEUS`, reboot, and confirm persistence and
+7. Open `JARJESTELMA > DEBUG > NOPEUS`, change it with Up/Down, accept with
+   Right, reboot, and confirm persistence and
    that the bottom debug region never covers competition values.
 8. Using the shared adjacent GND, exercise GPIO19 speed pulses, GPIO20 reverse
    and GPIO21 foot reset; separately verify Trip 1 and Trip 2 reset buttons.
@@ -382,8 +391,9 @@ start point. Trip 2 is never reset by JAT automation.
    no pause distance, and exactly 1800 pulses / 1.800 km when trips are unreset.
 10. While startup entry, menu, calibration, and diagnostics are visible, verify
     pulses continue accumulating and speed/clock continue updating.
-11. Inspect display rotation, clipping, font readability, sprite refresh,
-    backlight, contrast, and flicker for the full 120-second run.
+11. Set display brightness through 10...100%, select every text color, toggle
+    labels, and inspect viewing angle, clipping, sprite refresh, contrast, and
+    flicker for the full 120-second run.
 12. Verify the two boards share GND and 3.3 V logic only; with separate USB
     supplies, do not connect their 5 V pins.
 13. During a pulse run, pull GPIO13 LOW and verify trip and competition distance

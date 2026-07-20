@@ -179,6 +179,13 @@ EditorResult RouteOrderEditor::acceptContinuation() {
     return finishWorkingSegment(domain::PointType::NORMAL);
   }
   if (continuation_ == 1) {
+    if (draft_.competitionType == domain::CompetitionType::NON_EMIT) {
+      working_.hasJatType = true;
+      working_.jatType = domain::JatType::MANNED_JAT;
+      working_.hasJatOffsetMinutes = true;
+      phase_ = EditorPhase::JAT_OFFSET;
+      return EditorResult::NONE;
+    }
     jatSelection_ = 0;
     phase_ = EditorPhase::JAT_TYPE;
     return EditorResult::NONE;
@@ -322,7 +329,10 @@ EditorResult RouteOrderEditor::handle(EditorKey key, bool longPress) {
     if (key == EditorKey::DOWN &&
         working_.jatOffsetMinutes > std::numeric_limits<int16_t>::min())
       --working_.jatOffsetMinutes;
-    if (key == EditorKey::LEFT) phase_ = EditorPhase::JAT_TYPE;
+    if (key == EditorKey::LEFT)
+      phase_ = draft_.competitionType == domain::CompetitionType::NON_EMIT
+                   ? EditorPhase::CONTINUATION
+                   : EditorPhase::JAT_TYPE;
     if (key == EditorKey::RIGHT)
       return finishWorkingSegment(domain::PointType::JAT);
   }

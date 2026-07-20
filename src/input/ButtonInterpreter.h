@@ -15,7 +15,8 @@ struct ButtonTransitions {
 class ButtonInterpreter {
  public:
   ButtonInterpreter(uint32_t debounceMs, uint32_t longPressDelayMs = 0,
-                    uint32_t repeatIntervalMs = 0);
+                    uint32_t repeatIntervalMs = 0,
+                    uint32_t minimumPressIntervalMs = 150);
 
   void reset(bool pressed, uint32_t nowMs);
   ButtonTransitions update(bool rawPressed, uint32_t nowMs);
@@ -26,6 +27,7 @@ class ButtonInterpreter {
   const uint32_t debounceMs_;
   const uint32_t longPressDelayMs_;
   const uint32_t repeatIntervalMs_;
+  const uint32_t minimumPressIntervalMs_;
   bool rawPressed_ = false;
   bool stablePressed_ = false;
   bool longStarted_ = false;
