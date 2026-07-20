@@ -1,5 +1,10 @@
 # ASkompu multi-board application shell
 
+Current release: **0.1.0 (prototype)**. This is the first versioned ASkompu
+release for hardware and in-car evaluation. It is not yet a production-ready
+or safety-certified navigation instrument; see [CHANGELOG.md](CHANGELOG.md) for
+the implemented scope and known limitations.
+
 This branch contains a hardware-independent ASkompu application shell and two
 main-computer display ports: the 320x170 LilyGO T-Display S3 and an ESP32-S3
 N16R8 with a 480x320 ILI9488 SPI display. The normative product and interaction
