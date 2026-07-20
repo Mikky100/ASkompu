@@ -53,9 +53,10 @@ After time acceptance the basic view shows:
   visual size and selected text color; Trip 2 remains available to the domain,
   diagnostics and reset input but is hidden from the basic view;
 - while a competition is active, current segment, right-aligned delta, and next
-  segment in fixed left/centre/right regions; `JAT` is shown above a current or
-  next segment whose endpoint is a JAT; while waiting for a start, the segment
-  that will begin is shown in the right-hand next-segment region;
+  segment in fixed left/centre/right regions; point zero is formatted as `L`
+  and the finish as `M`; the segment label is `JAT`, `MAALI`, or `MITTIS` as
+  applicable; while waiting for a start, the segment that will begin is shown
+  in the right-hand next-segment region;
 - optional rounded debug speed with `km/h` in its own bottom region.
 
 It contains no `MENU` or `DEV` text, menu hint, GPIO numbers, button states,

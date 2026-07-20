@@ -376,6 +376,34 @@ void testEditableRouteOrderValueFormattingKeepsValueKindsSeparate() {
   TEST_ASSERT_EQUAL_STRING("05:[3]0", text);
 }
 
+void testDriveSegmentFormattingUsesRoutePointNamesAndLabels() {
+  char range[16]{};
+  domain::SegmentDefinition segment;
+  segment.startPointIndex = 0;
+  segment.endPointIndex = 1;
+  segment.segmentType = domain::SegmentType::TIME;
+  ui::formatDriveSegmentRange(range, sizeof(range), segment);
+  TEST_ASSERT_EQUAL_STRING("L-1", range);
+  TEST_ASSERT_EQUAL_STRING("", ui::driveSegmentLabel(segment));
+
+  segment.segmentType = domain::SegmentType::MITTIS;
+  TEST_ASSERT_EQUAL_STRING("MITTIS", ui::driveSegmentLabel(segment));
+
+  segment.startPointIndex = 8;
+  segment.endPointIndex = 9;
+  segment.segmentType = domain::SegmentType::TIME;
+  segment.pointTypeAtEnd = domain::PointType::JAT;
+  ui::formatDriveSegmentRange(range, sizeof(range), segment);
+  TEST_ASSERT_EQUAL_STRING("8-9", range);
+  TEST_ASSERT_EQUAL_STRING("JAT", ui::driveSegmentLabel(segment));
+
+  segment.segmentType = domain::SegmentType::MITTIS;
+  segment.pointTypeAtEnd = domain::PointType::FINISH_M;
+  ui::formatDriveSegmentRange(range, sizeof(range), segment);
+  TEST_ASSERT_EQUAL_STRING("8-M", range);
+  TEST_ASSERT_EQUAL_STRING("MAALI", ui::driveSegmentLabel(segment));
+}
+
 void testCreationCancelAndValidationFailurePreserveCurrentOrder() {
   Fixture fixture;
   const domain::RouteOrder original =
@@ -1346,6 +1374,7 @@ int main(int, char**) {
   RUN_TEST(testNonEmitJatSkipsOnlyChoiceAndReturnsToContinuation);
   RUN_TEST(testMittisRangeAndForcedFollowingTimeSegment);
   RUN_TEST(testEditableRouteOrderValueFormattingKeepsValueKindsSeparate);
+  RUN_TEST(testDriveSegmentFormattingUsesRoutePointNamesAndLabels);
   RUN_TEST(testCreationCancelAndValidationFailurePreserveCurrentOrder);
   RUN_TEST(testRightEditsSegmentLeftCancelsAndFailedSavePreservesCurrent);
   RUN_TEST(testAccessPromptReplacementKeepsOldUntilSave);

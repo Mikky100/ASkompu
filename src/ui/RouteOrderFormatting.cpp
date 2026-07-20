@@ -15,6 +15,29 @@ const char* competitionTypeLabel(domain::CompetitionType competitionType) {
   return competitionType == domain::CompetitionType::EMIT ? "EMIT" : "EI EMIT";
 }
 
+void formatDriveSegmentRange(char* text, std::size_t size,
+                             const domain::SegmentDefinition& segment) {
+  if (!text || size == 0) return;
+  char start[8];
+  char end[8];
+  if (segment.startPointIndex == 0)
+    std::snprintf(start, sizeof(start), "L");
+  else
+    std::snprintf(start, sizeof(start), "%u", segment.startPointIndex);
+  if (segment.pointTypeAtEnd == domain::PointType::FINISH_M)
+    std::snprintf(end, sizeof(end), "M");
+  else
+    std::snprintf(end, sizeof(end), "%u", segment.endPointIndex);
+  std::snprintf(text, size, "%s-%s", start, end);
+}
+
+const char* driveSegmentLabel(const domain::SegmentDefinition& segment) {
+  if (segment.pointTypeAtEnd == domain::PointType::FINISH_M) return "MAALI";
+  if (segment.pointTypeAtEnd == domain::PointType::JAT) return "JAT";
+  if (segment.segmentType == domain::SegmentType::MITTIS) return "MITTIS";
+  return "";
+}
+
 void formatEditableRouteOrderValue(
     char* text, std::size_t size,
     const route::RouteOrderEditorView& editor) {

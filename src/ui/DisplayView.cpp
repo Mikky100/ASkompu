@@ -51,12 +51,6 @@ void formatDelta(char* text, size_t size, int64_t seconds) {
     std::snprintf(text, size, "%" PRId64, seconds);
 }
 
-void formatSegmentRange(char* text, size_t size,
-                        const domain::SegmentDefinition& segment) {
-  std::snprintf(text, size, "%u-%u", segment.startPointIndex,
-                segment.endPointIndex);
-}
-
 void formatSegmentValue(char* text, size_t size,
                         const domain::SegmentDefinition& segment) {
   if (segment.segmentType == domain::SegmentType::TIME) {
@@ -634,8 +628,10 @@ void DisplayView::showBasicView(const core::DisplayModel& model) {
   char atText[12];
   char currentRange[16]{};
   char currentValue[16]{};
+  const char* currentLabel = "";
   char nextRange[16]{};
   char nextValue[16]{};
+  const char* nextLabel = "";
   std::snprintf(clockText, sizeof(clockText), "%02u:%02u:%02u",
                 model.clock.hour, model.clock.minute, model.clock.second);
   std::snprintf(speedText, sizeof(speedText), "%.0f km/h", model.speedKmh);
@@ -645,16 +641,18 @@ void DisplayView::showBasicView(const core::DisplayModel& model) {
                 model.atOverlay.clockTime.hour, model.atOverlay.clockTime.minute,
                 model.atOverlay.clockTime.second);
   if (model.competition.hasCurrentSegment) {
-    formatSegmentRange(currentRange, sizeof(currentRange),
-                       model.competition.currentSegment);
+    formatDriveSegmentRange(currentRange, sizeof(currentRange),
+                            model.competition.currentSegment);
     formatSegmentValue(currentValue, sizeof(currentValue),
                        model.competition.currentSegment);
+    currentLabel = driveSegmentLabel(model.competition.currentSegment);
   }
   if (model.competition.hasNextSegment) {
-    formatSegmentRange(nextRange, sizeof(nextRange),
-                       model.competition.nextSegment);
+    formatDriveSegmentRange(nextRange, sizeof(nextRange),
+                            model.competition.nextSegment);
     formatSegmentValue(nextValue, sizeof(nextValue),
                        model.competition.nextSegment);
+    nextLabel = driveSegmentLabel(model.competition.nextSegment);
   }
 
   const DisplayLayout layout =
@@ -691,15 +689,12 @@ void DisplayView::showBasicView(const core::DisplayModel& model) {
 
     canvas_.setTextSize(layout.segmentFont.value);
     canvas_.setTextColor(textColor_, DISPLAY_BACKGROUND_COLOR);
-    if (model.competition.hasCurrentSegment &&
-        model.competition.currentSegment.pointTypeAtEnd ==
-            domain::PointType::JAT)
-      canvas_.drawString("JAT", centerX(layout.currentSegment),
+    if (currentLabel[0])
+      canvas_.drawString(currentLabel, centerX(layout.currentSegment),
                          layout.currentSegment.y + 10,
                          layout.segmentFont.face);
-    if (model.competition.hasNextSegment &&
-        model.competition.nextSegment.pointTypeAtEnd == domain::PointType::JAT)
-      canvas_.drawString("JAT", centerX(layout.nextSegment),
+    if (nextLabel[0])
+      canvas_.drawString(nextLabel, centerX(layout.nextSegment),
                          layout.nextSegment.y + 10,
                          layout.segmentFont.face);
     canvas_.setTextColor(textColor_, DISPLAY_BACKGROUND_COLOR);
