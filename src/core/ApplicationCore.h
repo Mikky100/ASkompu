@@ -19,6 +19,8 @@ enum class MenuPage : uint8_t {
   Results,
   Display,
   TextColor,
+  Brightness,
+  DisplayLabels,
   Trips,
   System,
   Debug,
@@ -54,6 +56,9 @@ class ApplicationCore {
   bool takeDebugDisplaySettingsSaveRequest(
       domain::DebugDisplaySettings& settings);
   void completeDebugDisplaySettingsSave(bool succeeded);
+  void setInitialDisplaySettings(const domain::DisplaySettings& settings);
+  bool takeDisplaySettingsSaveRequest(domain::DisplaySettings& settings);
+  void completeDisplaySettingsSave(bool succeeded);
   bool hasRouteOrder() const { return hasRouteOrder_; }
   const domain::RouteOrder* currentRouteOrder() const {
     return hasRouteOrder_ ? &currentRouteOrder_ : nullptr;
@@ -97,6 +102,7 @@ class ApplicationCore {
   void beginTimeEdit(bool startup);
   void resetTrip1();
   void resetTrip2();
+  void updateMittisTripStart();
   void addDistance(int64_t deltaMillimeters, uint32_t pulseCount);
   domain::EventRecord makeEvent(domain::DomainEventType type) const;
   uint64_t appendEvent(domain::EventRecord record);
@@ -122,12 +128,20 @@ class ApplicationCore {
   domain::DebugDisplaySettings editedDebugDisplaySettings_{};
   bool debugDisplaySavePending_ = false;
   bool debugDisplaySaveInFlight_ = false;
+  domain::DisplaySettings displaySettings_{};
+  domain::DisplaySettings editedDisplaySettings_{};
+  bool displaySettingsSavePending_ = false;
+  bool displaySettingsSaveInFlight_ = false;
   int64_t trip1DistanceMm_ = 0;
   int64_t trip2DistanceMm_ = 0;
   uint64_t totalPulseCount_ = 0;
   uint64_t trip1PulseCount_ = 0;
   uint64_t trip2PulseCount_ = 0;
   bool trip1ResetHeld_ = false;
+  uint16_t mittisTripSegmentIndex_ = 0xFFFFU;
+  bool trip1DisplayFreezeActive_ = false;
+  int64_t trip1DisplayFrozenMm_ = 0;
+  uint64_t trip1DisplayFreezeUntilMs_ = 0;
   bool calibrationSaveFailed_ = false;
   bool calibrationSavePending_ = false;
   bool calibrationSaveInFlight_ = false;
@@ -138,9 +152,10 @@ class ApplicationCore {
   bool loadedRouteOrderActive_ = false;
   bool routeOrderCompletionPending_ = false;
   bool routeOrderCompletionInFlight_ = false;
+  bool finishResultDismissed_ = false;
   domain::RouteOrder currentRouteOrder_;
   route::RouteOrderEditor routeOrderEditor_;
-  OrderAccessAction orderAccessAction_ = OrderAccessAction::Edit;
+  OrderAccessAction orderAccessAction_ = OrderAccessAction::Replace;
   Screen screen_ = Screen::StartupTimeEntry;
   MenuPage menuPage_ = MenuPage::Main;
   uint8_t mainMenuSelectedIndex_ = 0;

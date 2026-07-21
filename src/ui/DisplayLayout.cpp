@@ -7,16 +7,16 @@ namespace ui {
 DisplayLayout layoutFor(uint16_t width, uint16_t height) {
   if (width == 480 && height == 320) {
     return {480, 320,
-            {4, 4, 228, 48}, {240, 4, 236, 98}, {4, 54, 228, 48},
-            {4, 108, 148, 176}, {156, 108, 168, 176},
-            {328, 108, 148, 176}, {0, 288, 480, 32},
-            {4, 2}, {3, 2}, {4, 2}, {3, 2}, {2, 2}};
+            {4, 4, 228, 98}, {240, 4, 236, 98},
+            {4, 108, 116, 176}, {124, 108, 232, 176},
+            {360, 108, 116, 176}, {0, 288, 480, 32},
+            {4, 2}, {2, 2}, {3, 2}, {5, 2}, {2, 2}};
   }
   return {320, 170,
-          {2, 2, 150, 26}, {158, 2, 160, 54}, {2, 30, 150, 26},
-          {2, 60, 96, 88}, {101, 60, 118, 88}, {224, 60, 94, 88},
+          {2, 2, 150, 54}, {158, 2, 160, 54},
+          {2, 60, 76, 88}, {82, 60, 156, 88}, {242, 60, 76, 88},
           {0, 153, 320, 17},
-          {2, 2}, {2, 2}, {2, 2}, {3, 2}, {1, 2}};
+          {2, 2}, {1, 2}, {2, 2}, {4, 2}, {1, 2}};
 }
 
 bool isInside(const WidgetRect& rect, uint16_t width, uint16_t height) {
@@ -31,14 +31,12 @@ bool overlaps(const WidgetRect& a, const WidgetRect& b) {
 }
 
 bool validateLayout(const DisplayLayout& layout) {
-  const WidgetRect rects[] = {layout.trip1, layout.clock, layout.trip2,
+  const WidgetRect rects[] = {layout.trip1, layout.clock,
                               layout.currentSegment, layout.delta,
                               layout.nextSegment, layout.debugSpeed};
   for (const WidgetRect& rect : rects)
     if (!isInside(rect, layout.width, layout.height)) return false;
   return !overlaps(layout.trip1, layout.clock) &&
-         !overlaps(layout.clock, layout.trip2) &&
-         !overlaps(layout.trip1, layout.trip2) &&
          !overlaps(layout.currentSegment, layout.delta) &&
          !overlaps(layout.delta, layout.nextSegment) &&
          !overlaps(layout.currentSegment, layout.nextSegment) &&

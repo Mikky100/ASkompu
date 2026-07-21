@@ -13,6 +13,7 @@ class DisplayView : public DisplayPort {
   DisplayView();
   bool begin() override;
   void setBacklight(bool enabled) override;
+  void setBacklightPercent(uint8_t percent);
   uint16_t width() const override;
   uint16_t height() const override;
   void render(const core::DisplayModel& model) override;
@@ -32,11 +33,20 @@ class DisplayView : public DisplayPort {
   void showOrderAccess(const core::OrderAccessDisplayModel& model);
   void showOrder(const core::OrderDisplayModel& model);
   void showDiagnostics(const core::DiagnosticsDisplayModel& model);
+  void drawFooter(const char* left, const char* upDown, const char* right,
+                  uint16_t color);
 
   TFT_eSPI display_;
   TFT_eSprite canvas_;
+  core::DisplayModel lastModel_{};
+  core::Screen renderedScreen_ = core::Screen::StartupTimeEntry;
+  uint32_t menuTitleFingerprint_ = 0;
+  uint32_t menuRowsFingerprint_ = 0;
   uint16_t textColor_ = TFT_WHITE;
+  uint8_t backlightPercent_ = domain::DEFAULT_BACKLIGHT_PERCENT;
+  bool showLabels_ = true;
   bool spriteReady_ = false;
+  bool hasRendered_ = false;
 };
 
 }  // namespace ui

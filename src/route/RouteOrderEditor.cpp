@@ -22,6 +22,7 @@ domain::JatType emitJatType(uint8_t selection) {
 
 void RouteOrderEditor::beginCreate() {
   draft_ = domain::RouteOrder{};
+  draft_.competitionType = domain::CompetitionType::NON_EMIT;
   phase_ = EditorPhase::COMPETITION_TYPE;
   editingExisting_ = false;
   editingSegment_ = false;
@@ -72,6 +73,15 @@ uint8_t RouteOrderEditor::digitCount() const {
     return 4;
   if (working_.segmentType == domain::SegmentType::SPEED) return 2;
   return 4;
+}
+
+bool RouteOrderEditor::canSelectMittis() const {
+  for (size_t index = 0; index < draft_.segments.size(); ++index) {
+    if (editingSegment_ && index + 1 == selectedSegment_) continue;
+    if (draft_.segments[index].segmentType == domain::SegmentType::MITTIS)
+      return false;
+  }
+  return true;
 }
 
 void RouteOrderEditor::adjustValue(int8_t direction) {
@@ -178,6 +188,13 @@ EditorResult RouteOrderEditor::acceptContinuation() {
     return finishWorkingSegment(domain::PointType::NORMAL);
   }
   if (continuation_ == 1) {
+    if (draft_.competitionType == domain::CompetitionType::NON_EMIT) {
+      working_.hasJatType = true;
+      working_.jatType = domain::JatType::MANNED_JAT;
+      working_.hasJatOffsetMinutes = true;
+      phase_ = EditorPhase::JAT_OFFSET;
+      return EditorResult::NONE;
+    }
     jatSelection_ = 0;
     phase_ = EditorPhase::JAT_TYPE;
     return EditorResult::NONE;
@@ -187,11 +204,6 @@ EditorResult RouteOrderEditor::acceptContinuation() {
 
 EditorResult RouteOrderEditor::handle(EditorKey key, bool longPress) {
   saveFailed_ = false;
-  if (longPress && key == EditorKey::RIGHT && editingExisting_ &&
-      phase_ != EditorPhase::SAVE_PENDING) {
-    phase_ = EditorPhase::REPLACE_PROMPT;
-    return EditorResult::NONE;
-  }
   if (longPress && key == EditorKey::LEFT &&
       phase_ != EditorPhase::SAVE_PENDING) {
     if (!editingExisting_) {
@@ -204,11 +216,6 @@ EditorResult RouteOrderEditor::handle(EditorKey key, bool longPress) {
   if (phase_ == EditorPhase::CANCEL_PROMPT) {
     if (key == EditorKey::LEFT) phase_ = phaseBeforeCancel_;
     if (key == EditorKey::RIGHT) return EditorResult::EXIT;
-    return EditorResult::NONE;
-  }
-  if (phase_ == EditorPhase::REPLACE_PROMPT) {
-    if (key == EditorKey::LEFT) phase_ = EditorPhase::BROWSE;
-    if (key == EditorKey::RIGHT) beginCreate();
     return EditorResult::NONE;
   }
   if (phase_ == EditorPhase::SAVE_PENDING) return EditorResult::NONE;
@@ -255,8 +262,10 @@ EditorResult RouteOrderEditor::handle(EditorKey key, bool longPress) {
   if (phase_ == EditorPhase::SEGMENT_TYPE) {
     if (key == EditorKey::UP || key == EditorKey::DOWN) {
       const uint8_t current = static_cast<uint8_t>(working_.segmentType);
+      const uint8_t typeCount = canSelectMittis() ? 3 : 2;
       const uint8_t next = static_cast<uint8_t>(
-          (current + (key == EditorKey::UP ? 2 : 1)) % 3);
+          (current + (key == EditorKey::UP ? typeCount - 1 : 1)) %
+          typeCount);
       working_.segmentType = static_cast<domain::SegmentType>(next);
       working_.value = 0;
       working_.hasMittisDuration = false;
@@ -331,7 +340,10 @@ EditorResult RouteOrderEditor::handle(EditorKey key, bool longPress) {
     if (key == EditorKey::DOWN &&
         working_.jatOffsetMinutes > std::numeric_limits<int16_t>::min())
       --working_.jatOffsetMinutes;
-    if (key == EditorKey::LEFT) phase_ = EditorPhase::JAT_TYPE;
+    if (key == EditorKey::LEFT)
+      phase_ = draft_.competitionType == domain::CompetitionType::NON_EMIT
+                   ? EditorPhase::CONTINUATION
+                   : EditorPhase::JAT_TYPE;
     if (key == EditorKey::RIGHT)
       return finishWorkingSegment(domain::PointType::JAT);
   }

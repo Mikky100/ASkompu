@@ -1,5 +1,10 @@
 # ASkompu multi-board application shell
 
+Current release: **0.1.0 (prototype)**. This is the first versioned ASkompu
+release for hardware and in-car evaluation. It is not yet a production-ready
+or safety-certified navigation instrument; see [CHANGELOG.md](CHANGELOG.md) for
+the implemented scope and known limitations.
+
 This branch contains a hardware-independent ASkompu application shell and two
 main-computer display ports: the 320x170 LilyGO T-Display S3 and an ESP32-S3
 N16R8 with a 480x320 ILI9488 SPI display. The normative product and interaction
@@ -11,8 +16,15 @@ TIME, SPEED and MITTIS calculation, start waiting, normal points, immediate
 point undo, JAT stages, finish, scoring, AT, additional orders and road breaks
 run in RAM. JAT supports `MANNED_JAT`, `EMIT_JAT_OFFSET`, `EMIT_MLA` and
 `EMIT_ULA`, including their start-time proposals and physical stage-distance
-zero points. MITTIS calibration proposals use integer arithmetic and a changed
+zero points. At JAT the completed delta is stored for scoring while the active
+competition clock resets to zero and remains stopped until the accepted next
+start time. MITTIS calibration proposals use integer arithmetic and a changed
 factor affects only future pulses.
+
+At the start of every MITTIS segment, Trip 1 resets. Its displayed value stays
+at zero for ten seconds while the internal Trip 1 and competition calculations
+continue accumulating normally; after the hold the current accumulated value
+is shown.
 
 Events are written in order to a hardware-independent RAM repository. The log
 contains point/undo, AT/cancel, JAT, finish, start-time, MITTIS, override,
@@ -42,10 +54,14 @@ normal non-blocking loop.
 
 After time acceptance the basic view shows:
 
-- Trip 1, `HH:MM:SS`, and Trip 2 in three fixed top-row regions, using the same
-  visual size and selected text color;
+- Trip 1 and `HH:MM:SS` in two large fixed top-row regions, using the same
+  visual size and selected text color; Trip 2 remains available to the domain,
+  diagnostics and reset input but is hidden from the basic view;
 - while a competition is active, current segment, right-aligned delta, and next
-  segment in fixed left/centre/right regions;
+  segment in fixed left/centre/right regions; point zero is formatted as `L`
+  and the finish as `M`; the segment label is `JAT`, `MAALI`, or `MITTIS` as
+  applicable; while waiting for a start, the segment that will begin is shown
+  in the right-hand next-segment region;
 - optional rounded debug speed with `km/h` in its own bottom region.
 
 It contains no `MENU` or `DEV` text, menu hint, GPIO numbers, button states,
@@ -54,9 +70,19 @@ appears only when enabled through `JARJESTELMA > DEBUG > NOPEUS`.
 
 The wiki defines Up/Down, not Right, as the way to open the main menu from the
 drive/basic view. Down opens at the first item and Up at the last item. The main
-menu wraps; submenus clamp at their ends. Left returns, Right opens or accepts,
+menu shows three larger rows at a time and wraps; submenus clamp at their ends.
+Left returns, Right opens or accepts,
 and a long Left abandons the current non-startup UI operation and returns to the
 basic view.
+
+Button edges are captured by interrupts with 20 ms debounce. General buttons
+use a 150 ms accepted-press guard. Right uses a stricter 350 ms guard and its
+normal navigation action is dispatched only after a complete stable release,
+so one noisy physical press cannot advance two input fields. A dispatched UI
+event requests an immediate redraw instead of waiting for the periodic display
+refresh. After the finish time and total points are shown, Left or Right returns
+to the normal basic view; the completed competition and its results remain
+available through the results menu.
 
 ## Menu tree
 
@@ -67,9 +93,9 @@ workflow; unavailable unrelated items remain visible but dimmed.
 |---|---|---|
 | Ajomääräys | Unified creation, browsing, editing, and confirmed replacement | Implemented |
 | Kello | Direct clock editing | Implemented |
-| Kerroin | Direct mm/pulse calibration editing | Implemented |
-| Pisteet ja tapahtumat | Jaksojen pisteet, Kokonaispisteet, Tapahtumat | Implemented from the current RAM event/result data |
-| Näyttöasetukset | Näyttöprofiili, Näyttöselitteet, Aikaeron muoto, Trip-tarkkuus, Tekstin väri | Persistent white/red/green text color works; other rows remain unavailable |
+| Kerroin | Direct mm/pulse calibration editing | Implemented; a long-repeat step changes the value by 10 instead of 1 |
+| Pisteet ja tapahtumat | Jaksojen pisteet, Tapahtumat | Implemented from the current RAM event/result data; stage browsing also shows the total |
+| Näyttöasetukset | Kirkkaus, Tekstin väri, Näyttöselitteet | Persistent 10...100% PWM brightness, white/red/green text color, and label visibility are implemented |
 | Tripit | Nollaa Trip 1, Nollaa Trip 2, Ulkoinen trip | Both resets work; external display source needs its hardware/protocol adapter |
 | Järjestelmä | Diagnostiikka, Debug, Painikeasetukset, Muut asetukset | Diagnostics and persistent Debug speed work; button/system settings are not implemented |
 
@@ -98,9 +124,11 @@ stop pulse processing.
 ## Route-order creation, editing, and storage
 
 `AJOMAARAYS` is now one top-level workflow. With no stored order it first asks
-for `EMIT` or `NON-EMIT`, locks that choice, asks for the competition start time,
-and then enters ordered TIME, SPEED, or MITTIS segments. Each accepted TIME or
-SPEED value continues with `SEURAAVA`, `JAT`, or `MAALI`. TIME accepts 1...3599
+for `EI EMIT` (the default) or `EMIT`, locks that choice, asks for the
+competition start time, and then enters ordered TIME, SPEED, or MITTIS segments.
+After one MITTIS has been entered, later segment-type choices contain only TIME
+and SPEED. Each accepted TIME or SPEED value continues with `SEURAAVA`, `JAT`,
+or `MAALI`. TIME accepts 1...3599
 seconds and SPEED a two-digit 1...99 km/h value. MITTIS accepts 1000...9999
 metres and then a TIME value for that same interval; SPEED is not available as
 the MITTIS interval's time rule. A finish is mandatory. Segment browsing starts
@@ -109,14 +137,15 @@ Segment
 browsing labels the start point as `L` and the finish point as `M`, for example
 `L-1` and `3-M`.
 
-With an existing order, Up/Down browses segments, Right edits the selected
-segment, and Left returns or abandons the in-progress edit. A long Right opens
-the `UUSI AJOMAARAYS?` confirmation; Left declines and Right starts a separate
-replacement draft. Competition type is not part of ordinary editing.
-
-In `WAIT_START` and `RUNNING`, opening `AJOMAARAYS` first shows `MUOKKAA
-AJOMAARAYS`. Up/Down toggles to `KORVAA AJOMAARAYS`, Right confirms the selected
-workflow, and Left returns to the menu.
+With an existing order, opening `AJOMAARAYS` defaults to `UUSI AJOMAARAYS`,
+including in `IDLE`. Up/Down toggles to `MUOKKAA AJOMAARAYS`, Right confirms
+the selected workflow, and Left returns to the menu without changing
+the order or competition state. Editing then browses segments with Up/Down,
+Right edits the selected segment, and Left returns or abandons the in-progress
+edit. Replacement starts a separate draft from the competition-type selection;
+the old long-Right replacement prompt is not used. Competition type is not part
+of ordinary editing. The UI term `EI EMIT` maps to the unchanged domain enum
+`CompetitionType::NON_EMIT`.
 
 The domain model and validator are in `src/domain/RouteOrder.*`. The editor,
 binary codec, and UI-independent storage port are in `src/route/`. The ESP32
@@ -143,19 +172,31 @@ import adapter.
 - `src/domain/` contains calculation, saturation, trip, speed and calibration
   primitives plus scoring, event/result models and the RAM event repository.
 - `src/input/` adapts active-low buttons, the reverse level, and
-  interrupt-driven pulses. `ButtonInterpreter` and the 20 ms continuous-level
-  `StableSignalFilter` are native-testable.
+  interrupt-driven pulses. Button CHANGE interrupts timestamp edges into small
+  per-button queues; debounce, short/long-press interpretation and application
+  calls stay outside the ISR. `ButtonInterpreter` and the 20 ms
+  continuous-level `StableSignalFilter` are native-testable.
 - `src/ports/ArduinoClock.h` is the `millis()`/`micros()` adapter.
 - `include/board/` selects one GPIO/display profile from the PlatformIO build
   definition. Missing or conflicting profile definitions stop compilation.
 - `src/settings/` is the only Preferences/NVS adapter. It stores calibration,
-  text color, competition parameters and the versionable Debug bitmask, never
-  wall-clock time.
+  text color, backlight brightness, display-label visibility, competition
+  parameters and the versionable Debug bitmask, never wall-clock time.
 - `src/ui/DisplayPort.h` is the display boundary. `DisplayView` owns TFT_eSPI,
   controller initialization, backlight and sprite rendering, while
   `DisplayLayout.*` provides native-testable 320x170 and 480x320 geometry.
   The ILI9488 sprite requests PSRAM and handles allocation failure without
-  dereferencing a null buffer.
+  dereferencing a null buffer. The 480x320 profile uses cropped sprite pushes:
+  unchanged periodic frames produce no SPI transfer, basic-view fields update
+  independently, and an unchanged menu page moves only its narrow selection
+  marker. The external ILI9488 SPI clock is 40 MHz.
+  LilyGO normally requests basic/competition-view updates every 100 ms. The
+  ILI9488 profile requests them every 50 ms to make pulse-quantized Trip 1 motion
+  more even, while still transferring only changed cropped regions and avoiding
+  a full PSRAM-sprite clear for an ordinary trip-only update. In competition
+  mode the current segment, delta, next segment, and debug row are invalidated
+  independently; AT's internal travelled-distance updates do not trigger a
+  transfer because that value is not drawn in the basic view.
 - `src/main.cpp` wires the adapters and keeps pulse, button, speed, clock, save,
   and display work non-blocking.
 
@@ -303,7 +344,8 @@ diagnostics.
    fixed positions, no clipping and no overlap at both short and long values.
 6. Verify TIME, SPEED, MITTIS, JAT, AT, finish, result, event, menu and editing
    views, including a missing next segment.
-7. Toggle `JARJESTELMA > DEBUG > NOPEUS`, reboot, and confirm persistence and
+7. Open `JARJESTELMA > DEBUG > NOPEUS`, change it with Up/Down, accept with
+   Right, reboot, and confirm persistence and
    that the bottom debug region never covers competition values.
 8. Using the shared adjacent GND, exercise GPIO19 speed pulses, GPIO20 reverse
    and GPIO21 foot reset; separately verify Trip 1 and Trip 2 reset buttons.
@@ -341,7 +383,7 @@ start point. Trip 2 is never reset by JAT automation.
    pressed on the minute field; accept `0:00`, `7:05`, `12:30`, and `23:59`.
 2. Confirm acceptance starts at exactly `H:MM:00`, the clock advances, and a
    power cycle asks again rather than restoring time from NVS.
-3. Inspect the basic view for equal-size Trip 1, clock and Trip 2 values; confirm
+3. Inspect the basic view for equal-size Trip 1 and clock values with Trip 2 hidden; confirm
    speed is absent by default and no MENU, DEV, GPIO, button, total-pulse,
    calibration, or debug text appears.
 4. Confirm Down opens the first wiki menu item, Up opens the last, the main menu
@@ -358,8 +400,11 @@ start point. Trip 2 is never reset by JAT automation.
    no pause distance, and exactly 1800 pulses / 1.800 km when trips are unreset.
 10. While startup entry, menu, calibration, and diagnostics are visible, verify
     pulses continue accumulating and speed/clock continue updating.
-11. Inspect display rotation, clipping, font readability, sprite refresh,
-    backlight, contrast, and flicker for the full 120-second run.
+11. Set display brightness through 10...100%, select every text color, toggle
+    labels, and confirm that disabling labels removes all footer instructions.
+    When enabled, verify Left, Up/Down, and Right instructions appear in that
+    physical order. Inspect viewing angle, clipping, sprite refresh, contrast,
+    and flicker for the full 120-second run.
 12. Verify the two boards share GND and 3.3 V logic only; with separate USB
     supplies, do not connect their 5 V pins.
 13. During a pulse run, pull GPIO13 LOW and verify trip and competition distance

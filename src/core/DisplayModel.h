@@ -135,7 +135,7 @@ struct CompetitionDisplayModel {
   bool undoPromptVisible;
 };
 
-constexpr uint8_t MENU_VISIBLE_ROWS = 5;
+constexpr uint8_t MENU_VISIBLE_ROWS = 3;
 
 struct MenuRowDisplayModel {
   const char* label;
@@ -177,6 +177,8 @@ struct DiagnosticsDisplayModel {
 struct DisplayModel {
   Screen screen;
   domain::TextColor textColor;
+  uint8_t backlightPercent;
+  bool showLabels;
   ClockTime clock;
   float speedKmh;
   bool showSpeed;

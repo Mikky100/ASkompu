@@ -15,6 +15,7 @@
 #include "route/RouteOrderCodec.h"
 #include "route/RouteOrderEditor.h"
 #include "route/RouteOrderStore.h"
+#include "ui/RouteOrderFormatting.h"
 
 void setUp() {}
 void tearDown() {}
@@ -129,7 +130,7 @@ domain::RouteOrder makeOrder(domain::CompetitionType competitionType,
 void createOneSecondOrder(route::RouteOrderEditor& editor,
                           domain::CompetitionType competitionType) {
   editor.beginCreate();
-  if (competitionType == domain::CompetitionType::NON_EMIT)
+  if (competitionType == domain::CompetitionType::EMIT)
     editor.handle(route::EditorKey::DOWN);
   editor.handle(route::EditorKey::RIGHT);  // lock competition type
   editor.handle(route::EditorKey::UP);     // start 01:00
@@ -170,13 +171,20 @@ void testEmitAndNonEmitOrderCreation() {
 void testCompetitionTypeIsImmutableAfterSelectionAndDuringEdit() {
   route::RouteOrderEditor editor;
   editor.beginCreate();
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(domain::CompetitionType::NON_EMIT),
+      static_cast<uint8_t>(editor.draft().competitionType));
+  editor.handle(route::EditorKey::UP);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(domain::CompetitionType::EMIT),
+                          static_cast<uint8_t>(editor.draft().competitionType));
+  editor.handle(route::EditorKey::DOWN);
   editor.handle(route::EditorKey::RIGHT);
   editor.handle(route::EditorKey::LEFT);
   TEST_ASSERT_EQUAL_UINT8(
       static_cast<uint8_t>(route::EditorPhase::START_TIME),
       static_cast<uint8_t>(editor.view().phase));
   editor.handle(route::EditorKey::UP);
-  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(domain::CompetitionType::EMIT),
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(domain::CompetitionType::NON_EMIT),
                           static_cast<uint8_t>(editor.draft().competitionType));
 
   const domain::RouteOrder current =
@@ -248,6 +256,33 @@ void testJatValidationByCompetitionType() {
       static_cast<uint8_t>(domain::validateRouteOrder(order)));
 }
 
+void testNonEmitJatSkipsOnlyChoiceAndReturnsToContinuation() {
+  route::RouteOrderEditor editor;
+  editor.beginCreate();
+  editor.handle(route::EditorKey::RIGHT);  // NON-EMIT
+  editor.handle(route::EditorKey::RIGHT);  // hour -> minute
+  editor.handle(route::EditorKey::RIGHT);  // start time
+  editor.handle(route::EditorKey::RIGHT);  // TIME value
+  editor.handle(route::EditorKey::RIGHT);
+  editor.handle(route::EditorKey::RIGHT);
+  editor.handle(route::EditorKey::RIGHT);
+  editor.handle(route::EditorKey::UP);     // 00:01
+  editor.handle(route::EditorKey::RIGHT);  // continuation
+  editor.handle(route::EditorKey::DOWN);   // JAT
+  editor.handle(route::EditorKey::RIGHT);
+
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(route::EditorPhase::JAT_OFFSET),
+      static_cast<uint8_t>(editor.view().phase));
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(domain::JatType::MANNED_JAT),
+                          static_cast<uint8_t>(editor.view().jatType));
+
+  editor.handle(route::EditorKey::LEFT);
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(route::EditorPhase::CONTINUATION),
+      static_cast<uint8_t>(editor.view().phase));
+}
+
 void testMittisRangeAndForcedFollowingTimeSegment() {
   domain::RouteOrder order;
   domain::SegmentDefinition mittis;
@@ -291,6 +326,10 @@ void testMittisRangeAndForcedFollowingTimeSegment() {
   TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(domain::SegmentType::MITTIS),
                           static_cast<uint8_t>(editor.view().segmentType));
   TEST_ASSERT_TRUE(editor.view().enteringMittisTime);
+  char editableTime[16]{};
+  ui::formatEditableRouteOrderValue(editableTime, sizeof(editableTime),
+                                    editor.view());
+  TEST_ASSERT_NOT_NULL(std::strchr(editableTime, ':'));
   editor.handle(route::EditorKey::LEFT);
   TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(route::EditorPhase::VALUE),
                           static_cast<uint8_t>(editor.view().phase));
@@ -314,6 +353,57 @@ void testMittisRangeAndForcedFollowingTimeSegment() {
                            editor.draft().segments[0].mittisDurationSeconds);
 }
 
+void testEditableRouteOrderValueFormattingKeepsValueKindsSeparate() {
+  route::RouteOrderEditorView view{};
+  char text[16]{};
+
+  view.segmentType = domain::SegmentType::MITTIS;
+  view.value = 1234;
+  view.digitCursor = 0;
+  ui::formatEditableRouteOrderValue(text, sizeof(text), view);
+  TEST_ASSERT_EQUAL_STRING("[1]234", text);
+
+  view.segmentType = domain::SegmentType::SPEED;
+  view.value = 42;
+  ui::formatEditableRouteOrderValue(text, sizeof(text), view);
+  TEST_ASSERT_EQUAL_STRING("[4]2", text);
+
+  view.segmentType = domain::SegmentType::MITTIS;
+  view.enteringMittisTime = true;
+  view.value = 330;
+  view.digitCursor = 2;
+  ui::formatEditableRouteOrderValue(text, sizeof(text), view);
+  TEST_ASSERT_EQUAL_STRING("05:[3]0", text);
+}
+
+void testDriveSegmentFormattingUsesRoutePointNamesAndLabels() {
+  char range[16]{};
+  domain::SegmentDefinition segment;
+  segment.startPointIndex = 0;
+  segment.endPointIndex = 1;
+  segment.segmentType = domain::SegmentType::TIME;
+  ui::formatDriveSegmentRange(range, sizeof(range), segment);
+  TEST_ASSERT_EQUAL_STRING("L-1", range);
+  TEST_ASSERT_EQUAL_STRING("", ui::driveSegmentLabel(segment));
+
+  segment.segmentType = domain::SegmentType::MITTIS;
+  TEST_ASSERT_EQUAL_STRING("MITTIS", ui::driveSegmentLabel(segment));
+
+  segment.startPointIndex = 8;
+  segment.endPointIndex = 9;
+  segment.segmentType = domain::SegmentType::TIME;
+  segment.pointTypeAtEnd = domain::PointType::JAT;
+  ui::formatDriveSegmentRange(range, sizeof(range), segment);
+  TEST_ASSERT_EQUAL_STRING("8-9", range);
+  TEST_ASSERT_EQUAL_STRING("JAT", ui::driveSegmentLabel(segment));
+
+  segment.segmentType = domain::SegmentType::MITTIS;
+  segment.pointTypeAtEnd = domain::PointType::FINISH_M;
+  ui::formatDriveSegmentRange(range, sizeof(range), segment);
+  TEST_ASSERT_EQUAL_STRING("8-M", range);
+  TEST_ASSERT_EQUAL_STRING("MAALI", ui::driveSegmentLabel(segment));
+}
+
 void testCreationCancelAndValidationFailurePreserveCurrentOrder() {
   Fixture fixture;
   const domain::RouteOrder original =
@@ -321,7 +411,9 @@ void testCreationCancelAndValidationFailurePreserveCurrentOrder() {
   fixture.application.setInitialRouteOrder(original);
   acceptStartupTime(fixture, 0, 0);
   openMainAt(fixture, 0);
-  press(fixture.application, core::ButtonId::Right);
+  press(fixture.application, core::ButtonId::Right);  // access prompt
+  press(fixture.application, core::ButtonId::Down);   // edit
+  press(fixture.application, core::ButtonId::Right);  // edit
   press(fixture.application, core::ButtonId::Down);
   press(fixture.application, core::ButtonId::Right);  // edit selected
   press(fixture.application, core::ButtonId::Down);   // SPEED, zero draft value
@@ -343,7 +435,9 @@ void testRightEditsSegmentLeftCancelsAndFailedSavePreservesCurrent() {
   fixture.application.setInitialRouteOrder(original);
   acceptStartupTime(fixture, 0, 0);
   openMainAt(fixture, 0);
-  press(fixture.application, core::ButtonId::Right);
+  press(fixture.application, core::ButtonId::Right);  // access prompt
+  press(fixture.application, core::ButtonId::Down);   // edit
+  press(fixture.application, core::ButtonId::Right);  // edit
   press(fixture.application, core::ButtonId::Down);
   press(fixture.application, core::ButtonId::Right);
   TEST_ASSERT_EQUAL_UINT8(
@@ -374,7 +468,7 @@ void testRightEditsSegmentLeftCancelsAndFailedSavePreservesCurrent() {
                                                    .segmentType));
 }
 
-void testLongRightStartsConfirmedReplacementAndKeepsOldUntilSave() {
+void testAccessPromptReplacementKeepsOldUntilSave() {
   Fixture fixture;
   const domain::RouteOrder original =
       makeOrder(domain::CompetitionType::NON_EMIT, domain::SegmentType::TIME,
@@ -382,23 +476,18 @@ void testLongRightStartsConfirmedReplacementAndKeepsOldUntilSave() {
   fixture.application.setInitialRouteOrder(original);
   acceptStartupTime(fixture, 0, 0);
   openMainAt(fixture, 0);
-  press(fixture.application, core::ButtonId::Right);  // browse
-
-  press(fixture.application, core::ButtonId::Right);  // press precedes long start
-  fixture.application.handleButton(
-      button(core::ButtonId::Right, core::ButtonEventType::LongStart));
+  press(fixture.application, core::ButtonId::Right);  // access prompt
   TEST_ASSERT_EQUAL_UINT8(
-      static_cast<uint8_t>(route::EditorPhase::REPLACE_PROMPT),
-      static_cast<uint8_t>(fixture.application.displayModel().order.editor.phase));
-  press(fixture.application, core::ButtonId::Left);
+      static_cast<uint8_t>(core::OrderAccessAction::Replace),
+      static_cast<uint8_t>(
+          fixture.application.displayModel().orderAccess.selectedAction));
+  press(fixture.application, core::ButtonId::Down);
   TEST_ASSERT_EQUAL_UINT8(
-      static_cast<uint8_t>(route::EditorPhase::BROWSE),
-      static_cast<uint8_t>(fixture.application.displayModel().order.editor.phase));
-
-  press(fixture.application, core::ButtonId::Right);
-  fixture.application.handleButton(
-      button(core::ButtonId::Right, core::ButtonEventType::LongStart));
-  press(fixture.application, core::ButtonId::Right);  // confirm replacement
+      static_cast<uint8_t>(core::OrderAccessAction::Edit),
+      static_cast<uint8_t>(
+          fixture.application.displayModel().orderAccess.selectedAction));
+  press(fixture.application, core::ButtonId::Up);
+  press(fixture.application, core::ButtonId::Right);  // start replacement
   TEST_ASSERT_EQUAL_UINT8(
       static_cast<uint8_t>(route::EditorPhase::COMPETITION_TYPE),
       static_cast<uint8_t>(fixture.application.displayModel().order.editor.phase));
@@ -406,7 +495,7 @@ void testLongRightStartsConfirmedReplacementAndKeepsOldUntilSave() {
       static_cast<uint8_t>(domain::CompetitionType::NON_EMIT),
       static_cast<uint8_t>(fixture.application.currentRouteOrder()->competitionType));
 
-  press(fixture.application, core::ButtonId::Right);  // lock EMIT
+  press(fixture.application, core::ButtonId::Right);  // lock NON_EMIT
   press(fixture.application, core::ButtonId::Right);  // hour -> minute
   press(fixture.application, core::ButtonId::Right);  // accept 00:00
   press(fixture.application, core::ButtonId::Right);  // TIME value
@@ -422,13 +511,13 @@ void testLongRightStartsConfirmedReplacementAndKeepsOldUntilSave() {
   const domain::RouteOrder* replacement = nullptr;
   TEST_ASSERT_TRUE(
       fixture.application.takeRouteOrderSaveRequest(replacement));
-  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(domain::CompetitionType::EMIT),
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(domain::CompetitionType::NON_EMIT),
                           static_cast<uint8_t>(replacement->competitionType));
   TEST_ASSERT_EQUAL_UINT32(1, replacement->segments[0].value);
   TEST_ASSERT_EQUAL_UINT32(60,
                            fixture.application.currentRouteOrder()->segments[0].value);
   fixture.application.completeRouteOrderSave(true);
-  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(domain::CompetitionType::EMIT),
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(domain::CompetitionType::NON_EMIT),
                           static_cast<uint8_t>(fixture.application
                                                    .currentRouteOrder()
                                                    ->competitionType));
@@ -442,10 +531,7 @@ void testCancelledReplacementKeepsCurrentOrder() {
   fixture.application.setInitialRouteOrder(original);
   acceptStartupTime(fixture, 0, 0);
   openMainAt(fixture, 0);
-  press(fixture.application, core::ButtonId::Right);
-  press(fixture.application, core::ButtonId::Right);
-  fixture.application.handleButton(
-      button(core::ButtonId::Right, core::ButtonEventType::LongStart));
+  press(fixture.application, core::ButtonId::Right);  // access prompt
   press(fixture.application, core::ButtonId::Right);  // start replacement
   fixture.application.handleButton(
       button(core::ButtonId::Left, core::ButtonEventType::LongStart));
@@ -644,7 +730,7 @@ void testMainMenuWrapsAndSubmenuClamps() {
                           static_cast<uint8_t>(fixture.application.screen()));
   press(fixture.application, core::ButtonId::Up);
   TEST_ASSERT_EQUAL_UINT8(
-      static_cast<uint8_t>(domain::CompetitionType::NON_EMIT),
+      static_cast<uint8_t>(domain::CompetitionType::EMIT),
       static_cast<uint8_t>(fixture.application.displayModel()
                                .order.editor.competitionType));
 }
@@ -655,7 +741,7 @@ void testLongMainMenuScrollKeepsSelectionVisible() {
   press(fixture.application, core::ButtonId::Up);
   const core::MenuDisplayModel menu = fixture.application.displayModel().menu;
   TEST_ASSERT_EQUAL_UINT8(6, menu.selectedIndex);
-  TEST_ASSERT_EQUAL_UINT8(2, menu.scrollOffset);
+  TEST_ASSERT_EQUAL_UINT8(7 - core::MENU_VISIBLE_ROWS, menu.scrollOffset);
   TEST_ASSERT_TRUE(menu.selectedVisibleRow < menu.visibleRowCount);
 }
 
@@ -669,6 +755,37 @@ void testOrderMenuStartsUnifiedCreation() {
   TEST_ASSERT_EQUAL_UINT8(
       static_cast<uint8_t>(route::EditorPhase::COMPETITION_TYPE),
       static_cast<uint8_t>(fixture.application.displayModel().order.editor.phase));
+  TEST_ASSERT_EQUAL_STRING(
+      "EI EMIT",
+      ui::competitionTypeLabel(
+          fixture.application.displayModel().order.editor.competitionType));
+  press(fixture.application, core::ButtonId::Right);
+  TEST_ASSERT_EQUAL_STRING(
+      "LAHTOAIKA",
+      ui::routeOrderEditorTitle(
+          fixture.application.displayModel().order.editor));
+}
+
+void testExistingOrderAccessPromptDefaultsToNewAndLeftPreservesOrder() {
+  Fixture fixture;
+  const domain::RouteOrder original =
+      makeOrder(domain::CompetitionType::EMIT, domain::SegmentType::TIME, 60);
+  fixture.application.setInitialRouteOrder(original);
+  acceptStartupTime(fixture, 0, 0);
+  openMainAt(fixture, 0);
+  press(fixture.application, core::ButtonId::Right);
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(core::Screen::OrderAccessPrompt),
+      static_cast<uint8_t>(fixture.application.screen()));
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(core::OrderAccessAction::Replace),
+      static_cast<uint8_t>(
+          fixture.application.displayModel().orderAccess.selectedAction));
+  press(fixture.application, core::ButtonId::Left);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(core::Screen::Menu),
+                          static_cast<uint8_t>(fixture.application.screen()));
+  TEST_ASSERT_EQUAL_UINT32(
+      60, fixture.application.currentRouteOrder()->segments[0].value);
 }
 
 void testOrderBrowseShowsStartTimeBeforeSegments() {
@@ -679,7 +796,9 @@ void testOrderBrowseShowsStartTimeBeforeSegments() {
   fixture.application.setInitialRouteOrder(order);
   acceptStartupTime(fixture, 0, 0);
   openMainAt(fixture, 0);
-  press(fixture.application, core::ButtonId::Right);
+  press(fixture.application, core::ButtonId::Right);  // access prompt
+  press(fixture.application, core::ButtonId::Down);   // edit
+  press(fixture.application, core::ButtonId::Right);  // edit
   TEST_ASSERT_TRUE(fixture.application.displayModel().order.showsStartTime);
   TEST_ASSERT_FALSE(
       fixture.application.displayModel().order.hasSelectedSegment);
@@ -693,8 +812,7 @@ void testPersistentTextColorSelectionRequest() {
   acceptStartupTime(fixture, 0, 0);
   openMainAt(fixture, 4);
   press(fixture.application, core::ButtonId::Right);  // display menu
-  for (uint8_t index = 0; index < 4; ++index)
-    press(fixture.application, core::ButtonId::Down);
+  press(fixture.application, core::ButtonId::Down);
   press(fixture.application, core::ButtonId::Right);  // text color choices
   press(fixture.application, core::ButtonId::Down);   // red
   press(fixture.application, core::ButtonId::Right);
@@ -706,6 +824,7 @@ void testPersistentTextColorSelectionRequest() {
       static_cast<uint8_t>(domain::TextColor::WHITE),
       static_cast<uint8_t>(fixture.application.displayModel().textColor));
   fixture.application.completeTextColorSave(true);
+  TEST_ASSERT_EQUAL_UINT8(1, fixture.application.menuSelectedIndex());
   TEST_ASSERT_EQUAL_UINT8(
       static_cast<uint8_t>(domain::TextColor::RED),
       static_cast<uint8_t>(fixture.application.displayModel().textColor));
@@ -748,6 +867,22 @@ void testClockAndPulsesContinueInMenuAndDiagnostics() {
   assertClock(diagnostics.clock, 1, 0, 2);
   TEST_ASSERT_EQUAL_UINT64(2, diagnostics.diagnostics.totalPulseCount);
   TEST_ASSERT_EQUAL_UINT64(2000, diagnostics.trip1.distanceMillimeters);
+}
+
+void testPulsesContinueInOrderPromptAndEditor() {
+  Fixture fixture;
+  fixture.application.setInitialRouteOrder(
+      makeOrder(domain::CompetitionType::NON_EMIT));
+  acceptStartupTime(fixture, 0, 0);
+  openMainAt(fixture, 0);
+  press(fixture.application, core::ButtonId::Right);
+  pulse(fixture.application, 1, 0, 100000, 100000);
+  press(fixture.application, core::ButtonId::Down);
+  press(fixture.application, core::ButtonId::Right);
+  pulse(fixture.application, 1, 100000, 200000, 200000);
+  TEST_ASSERT_EQUAL_INT64(2000,
+                          fixture.application.trip1DistanceMillimeters());
+  TEST_ASSERT_EQUAL_UINT64(2, fixture.application.totalPulseCount());
 }
 
 void testDiagnosticsContainsStatesAndDoesNotMutateDomain() {
@@ -804,6 +939,53 @@ void testCalibrationMenuCancelUnchangedAndChangedSave() {
   TEST_ASSERT_EQUAL_UINT32(1001, value);
   fixture.application.completeCalibrationSave(true);
   TEST_ASSERT_EQUAL_UINT32(1001, fixture.application.millimetersPerPulse());
+}
+
+void testCalibrationLongRepeatUsesTenUnitStep() {
+  Fixture fixture;
+  acceptStartupTime(fixture, 0, 0);
+  openMainAt(fixture, 2);
+  press(fixture.application, core::ButtonId::Right);
+  fixture.application.handleButton(
+      button(core::ButtonId::Up, core::ButtonEventType::LongRepeat));
+  TEST_ASSERT_EQUAL_UINT32(
+      1010,
+      fixture.application.displayModel().calibration.editedMillimetersPerPulse);
+  fixture.application.handleButton(
+      button(core::ButtonId::Down, core::ButtonEventType::LongRepeat));
+  TEST_ASSERT_EQUAL_UINT32(
+      1000,
+      fixture.application.displayModel().calibration.editedMillimetersPerPulse);
+}
+
+void testExistingMittisIsNotOfferedForAnotherSegment() {
+  domain::RouteOrder order;
+  domain::SegmentDefinition mittis;
+  mittis.segmentType = domain::SegmentType::MITTIS;
+  mittis.value = 1000;
+  mittis.hasMittisDuration = true;
+  mittis.mittisDurationSeconds = 60;
+  order.segments.push_back(mittis);
+  domain::SegmentDefinition finish;
+  finish.segmentIndex = 1;
+  finish.startPointIndex = 1;
+  finish.endPointIndex = 2;
+  finish.segmentType = domain::SegmentType::TIME;
+  finish.value = 60;
+  finish.pointTypeAtEnd = domain::PointType::FINISH_M;
+  order.segments.push_back(finish);
+
+  route::RouteOrderEditor editor;
+  editor.beginBrowse(order);
+  editor.handle(route::EditorKey::DOWN);
+  editor.handle(route::EditorKey::DOWN);
+  editor.handle(route::EditorKey::RIGHT);
+  editor.handle(route::EditorKey::DOWN);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(domain::SegmentType::SPEED),
+                          static_cast<uint8_t>(editor.view().segmentType));
+  editor.handle(route::EditorKey::DOWN);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(domain::SegmentType::TIME),
+                          static_cast<uint8_t>(editor.view().segmentType));
 }
 
 void testCalibrationSaveFailureStaysInEditor() {
@@ -961,6 +1143,108 @@ void testButtonDebounceAndLongRepeatSemantics() {
   TEST_ASSERT_FALSE(released.shortPress);
 }
 
+void testDeferredButtonEdgesPreserveShortPress() {
+  input::ButtonInterpreter interpreter(35, 500, 100);
+  interpreter.reset(false, 0);
+
+  // Model an edge queue drained after both physical edges have occurred. The
+  // previous level is advanced to each interrupt timestamp before applying the
+  // new level, just as DebouncedButton does outside the ISR.
+  interpreter.update(false, 10);
+  interpreter.update(true, 10);
+  TEST_ASSERT_TRUE(interpreter.update(true, 110).pressed);
+  interpreter.update(false, 110);
+  const input::ButtonTransitions released = interpreter.update(false, 210);
+
+  TEST_ASSERT_TRUE(released.released);
+  TEST_ASSERT_TRUE(released.shortPress);
+  TEST_ASSERT_FALSE(released.longStart);
+}
+
+void testButtonInterpreterSuppressesDuplicateBouncePress() {
+  input::ButtonInterpreter interpreter(20, 500, 0);
+  interpreter.reset(false, 0);
+  interpreter.update(true, 0);
+  TEST_ASSERT_TRUE(interpreter.update(true, 20).pressed);
+  interpreter.update(false, 30);
+  TEST_ASSERT_TRUE(interpreter.update(false, 50).shortPress);
+
+  interpreter.update(true, 60);
+  const input::ButtonTransitions duplicatePress = interpreter.update(true, 80);
+  TEST_ASSERT_FALSE(duplicatePress.pressed);
+  interpreter.update(false, 90);
+  const input::ButtonTransitions duplicateRelease =
+      interpreter.update(false, 110);
+  TEST_ASSERT_FALSE(duplicateRelease.shortPress);
+
+  interpreter.update(true, 200);
+  TEST_ASSERT_TRUE(interpreter.update(true, 220).pressed);
+}
+
+void testButtonTimestampSlightlyBehindCannotStartLongPress() {
+  input::ButtonInterpreter point(20, 2000, 0, 500);
+  point.reset(false, 900);
+  point.update(true, 1000);
+  TEST_ASSERT_TRUE(point.update(true, 1020).pressed);
+
+  // ISR tick timestamps can lead millis() by a tick. This must not wrap into
+  // an apparent multi-day hold and open the additional-order menu.
+  const input::ButtonTransitions behind = point.update(true, 1019);
+  TEST_ASSERT_FALSE(behind.longStart);
+  TEST_ASSERT_TRUE(point.update(true, 3020).longStart);
+}
+
+void testRightButtonGuardRequiresASeparateSlowPress() {
+  input::ButtonInterpreter right(20, 500, 0, 350);
+  right.reset(false, 0);
+  right.update(true, 0);
+  TEST_ASSERT_TRUE(right.update(true, 20).pressed);
+  right.update(false, 80);
+  TEST_ASSERT_TRUE(right.update(false, 100).shortPress);
+
+  right.update(true, 200);
+  TEST_ASSERT_FALSE(right.update(true, 220).pressed);
+  right.update(false, 260);
+  TEST_ASSERT_FALSE(right.update(false, 280).shortPress);
+
+  right.update(true, 370);
+  TEST_ASSERT_TRUE(right.update(true, 390).pressed);
+  right.update(false, 450);
+  TEST_ASSERT_TRUE(right.update(false, 470).shortPress);
+}
+
+void testMittisStartResetsTripAndFreezesDisplayedTripForTenSeconds() {
+  Fixture fixture;
+  domain::RouteOrder order;
+  order.startHour = 0;
+  order.startMinute = 0;
+  domain::SegmentDefinition mittis;
+  mittis.segmentType = domain::SegmentType::MITTIS;
+  mittis.value = 1000;
+  mittis.hasMittisDuration = true;
+  mittis.mittisDurationSeconds = 60;
+  mittis.pointTypeAtEnd = domain::PointType::FINISH_M;
+  order.segments.push_back(mittis);
+  fixture.application.setInitialRouteOrder(order, true);
+  acceptStartupTime(fixture, 0, 0);
+  fixture.application.tick(0);
+
+  pulse(fixture.application, 2, 100000, 200000, 200000);
+  TEST_ASSERT_EQUAL_INT64(2000,
+                          fixture.application.trip1DistanceMillimeters());
+  TEST_ASSERT_EQUAL_INT64(
+      0, fixture.application.displayModel().trip1.distanceMillimeters);
+
+  fixture.timeSource.advance(9999);
+  fixture.application.tick(9999000);
+  TEST_ASSERT_EQUAL_INT64(
+      0, fixture.application.displayModel().trip1.distanceMillimeters);
+  fixture.timeSource.advance(1);
+  fixture.application.tick(10000000);
+  TEST_ASSERT_EQUAL_INT64(
+      2000, fixture.application.displayModel().trip1.distanceMillimeters);
+}
+
 void openDebugMenu(Fixture& fixture) {
   openMainAt(fixture, 6);
   press(fixture.application, core::ButtonId::Right);
@@ -987,22 +1271,34 @@ void testDebugSpeedCanBeEnabledDisabledAndFailureKeepsOldValue() {
   openDebugMenu(fixture);
   TEST_ASSERT_EQUAL_STRING("NOPEUS: POIS",
                            fixture.application.displayModel().menu.rows[0].label);
+  press(fixture.application, core::ButtonId::Up);
+  TEST_ASSERT_EQUAL_STRING("NOPEUS: PAALLA",
+                           fixture.application.displayModel().menu.rows[0].label);
+  TEST_ASSERT_FALSE(fixture.application.displayModel().showSpeed);
   press(fixture.application, core::ButtonId::Right);
   domain::DebugDisplaySettings requested;
   TEST_ASSERT_TRUE(
       fixture.application.takeDebugDisplaySettingsSaveRequest(requested));
   TEST_ASSERT_TRUE(requested.enabled(domain::DebugDisplayElement::SPEED));
+  TEST_ASSERT_FALSE(
+      fixture.application.takeDebugDisplaySettingsSaveRequest(requested));
   fixture.application.completeDebugDisplaySettingsSave(false);
   TEST_ASSERT_FALSE(fixture.application.displayModel().showSpeed);
+  press(fixture.application, core::ButtonId::Right);
+  TEST_ASSERT_EQUAL_STRING("NOPEUS: POIS",
+                           fixture.application.displayModel().menu.rows[0].label);
 
+  press(fixture.application, core::ButtonId::Down);
   press(fixture.application, core::ButtonId::Right);
   TEST_ASSERT_TRUE(
       fixture.application.takeDebugDisplaySettingsSaveRequest(requested));
   fixture.application.completeDebugDisplaySettingsSave(true);
   TEST_ASSERT_TRUE(fixture.application.displayModel().showSpeed);
+  press(fixture.application, core::ButtonId::Right);
   TEST_ASSERT_EQUAL_STRING(
       "NOPEUS: PAALLA", fixture.application.displayModel().menu.rows[0].label);
 
+  press(fixture.application, core::ButtonId::Up);
   press(fixture.application, core::ButtonId::Right);
   TEST_ASSERT_TRUE(
       fixture.application.takeDebugDisplaySettingsSaveRequest(requested));
@@ -1012,11 +1308,59 @@ void testDebugSpeedCanBeEnabledDisabledAndFailureKeepsOldValue() {
 
 void testUnchangedDebugSettingDoesNotRequestPersistentWrite() {
   Fixture fixture;
+  acceptStartupTime(fixture, 0, 0);
+  openDebugMenu(fixture);
   domain::DebugDisplaySettings requested;
-  fixture.application.setInitialDebugDisplaySettings(
-      domain::DebugDisplaySettings(0));
+  press(fixture.application, core::ButtonId::Right);
   TEST_ASSERT_FALSE(
       fixture.application.takeDebugDisplaySettingsSaveRequest(requested));
+  press(fixture.application, core::ButtonId::Right);
+  press(fixture.application, core::ButtonId::Up);
+  press(fixture.application, core::ButtonId::Down);
+  press(fixture.application, core::ButtonId::Right);
+  TEST_ASSERT_FALSE(
+      fixture.application.takeDebugDisplaySettingsSaveRequest(requested));
+  press(fixture.application, core::ButtonId::Right);
+  TEST_ASSERT_EQUAL_STRING("NOPEUS: POIS",
+                           fixture.application.displayModel().menu.rows[0].label);
+}
+
+void testDisplayBrightnessAndLabelsAreEditedThenAccepted() {
+  Fixture fixture;
+  acceptStartupTime(fixture, 0, 0);
+  fixture.application.setInitialDisplaySettings({60, true});
+  openMainAt(fixture, 4);
+  press(fixture.application, core::ButtonId::Right);
+
+  press(fixture.application, core::ButtonId::Right);  // brightness
+  TEST_ASSERT_EQUAL_STRING("KIRKKAUS: 60%",
+                           fixture.application.displayModel().menu.rows[0].label);
+  press(fixture.application, core::ButtonId::Up);
+  TEST_ASSERT_EQUAL_UINT8(70,
+                          fixture.application.displayModel().backlightPercent);
+  domain::DisplaySettings requested;
+  press(fixture.application, core::ButtonId::Right);
+  TEST_ASSERT_TRUE(
+      fixture.application.takeDisplaySettingsSaveRequest(requested));
+  TEST_ASSERT_EQUAL_UINT8(70, requested.backlightPercent);
+  TEST_ASSERT_TRUE(requested.showLabels);
+  fixture.application.completeDisplaySettingsSave(true);
+
+  press(fixture.application, core::ButtonId::Down);
+  press(fixture.application, core::ButtonId::Down);
+  press(fixture.application, core::ButtonId::Right);  // labels
+  press(fixture.application, core::ButtonId::Down);
+  TEST_ASSERT_EQUAL_STRING("SELITTEET: POIS",
+                           fixture.application.displayModel().menu.rows[0].label);
+  press(fixture.application, core::ButtonId::Right);
+  TEST_ASSERT_TRUE(
+      fixture.application.takeDisplaySettingsSaveRequest(requested));
+  TEST_ASSERT_EQUAL_UINT8(70, requested.backlightPercent);
+  TEST_ASSERT_FALSE(requested.showLabels);
+  fixture.application.completeDisplaySettingsSave(true);
+  TEST_ASSERT_EQUAL_UINT8(70,
+                          fixture.application.displayModel().backlightPercent);
+  TEST_ASSERT_FALSE(fixture.application.displayModel().showLabels);
 }
 
 }  // namespace
@@ -1027,10 +1371,13 @@ int main(int, char**) {
   RUN_TEST(testCompetitionTypeIsImmutableAfterSelectionAndDuringEdit);
   RUN_TEST(testRouteOrderValidationOrderValuesAndFinish);
   RUN_TEST(testJatValidationByCompetitionType);
+  RUN_TEST(testNonEmitJatSkipsOnlyChoiceAndReturnsToContinuation);
   RUN_TEST(testMittisRangeAndForcedFollowingTimeSegment);
+  RUN_TEST(testEditableRouteOrderValueFormattingKeepsValueKindsSeparate);
+  RUN_TEST(testDriveSegmentFormattingUsesRoutePointNamesAndLabels);
   RUN_TEST(testCreationCancelAndValidationFailurePreserveCurrentOrder);
   RUN_TEST(testRightEditsSegmentLeftCancelsAndFailedSavePreservesCurrent);
-  RUN_TEST(testLongRightStartsConfirmedReplacementAndKeepsOldUntilSave);
+  RUN_TEST(testAccessPromptReplacementKeepsOldUntilSave);
   RUN_TEST(testCancelledReplacementKeepsCurrentOrder);
   RUN_TEST(testCodecSaveReloadAndUnknownSchemaHandling);
   RUN_TEST(testClockValidationBoundaries);
@@ -1046,13 +1393,17 @@ int main(int, char**) {
   RUN_TEST(testMainMenuWrapsAndSubmenuClamps);
   RUN_TEST(testLongMainMenuScrollKeepsSelectionVisible);
   RUN_TEST(testOrderMenuStartsUnifiedCreation);
+  RUN_TEST(testExistingOrderAccessPromptDefaultsToNewAndLeftPreservesOrder);
   RUN_TEST(testOrderBrowseShowsStartTimeBeforeSegments);
   RUN_TEST(testPersistentTextColorSelectionRequest);
   RUN_TEST(testMenuTimeEditCancelAndAccept);
   RUN_TEST(testClockAndPulsesContinueInMenuAndDiagnostics);
+  RUN_TEST(testPulsesContinueInOrderPromptAndEditor);
   RUN_TEST(testDiagnosticsContainsStatesAndDoesNotMutateDomain);
   RUN_TEST(testCalibrationValidationStepAndFallback);
   RUN_TEST(testCalibrationMenuCancelUnchangedAndChangedSave);
+  RUN_TEST(testCalibrationLongRepeatUsesTenUnitStep);
+  RUN_TEST(testExistingMittisIsNotOfferedForAnotherSegment);
   RUN_TEST(testCalibrationSaveFailureStaysInEditor);
   RUN_TEST(testTripResetsAreIndependentAndKeepTotal);
   RUN_TEST(testFootResetMatchesTrip1ResetWithoutChangingTrip2);
@@ -1064,8 +1415,14 @@ int main(int, char**) {
   RUN_TEST(testCalibrationChangeAffectsOnlyFuturePulses);
   RUN_TEST(testDistanceMathAndLongRunSaturate);
   RUN_TEST(testButtonDebounceAndLongRepeatSemantics);
+  RUN_TEST(testDeferredButtonEdgesPreserveShortPress);
+  RUN_TEST(testButtonInterpreterSuppressesDuplicateBouncePress);
+  RUN_TEST(testButtonTimestampSlightlyBehindCannotStartLongPress);
+  RUN_TEST(testRightButtonGuardRequiresASeparateSlowPress);
+  RUN_TEST(testMittisStartResetsTripAndFreezesDisplayedTripForTenSeconds);
   RUN_TEST(testDebugSpeedDefaultsOffAndUnknownBitsAreFiltered);
   RUN_TEST(testDebugSpeedCanBeEnabledDisabledAndFailureKeepsOldValue);
   RUN_TEST(testUnchangedDebugSettingDoesNotRequestPersistentWrite);
+  RUN_TEST(testDisplayBrightnessAndLabelsAreEditedThenAccepted);
   return UNITY_END();
 }

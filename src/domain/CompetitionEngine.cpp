@@ -153,8 +153,18 @@ void CompetitionEngine::updateCalculation(uint64_t monotonicMs) {
   if (mittisProposal_.pending) return;
   realTimeMs_ = saturatingAddInt64(saturatingToInt64(monotonicMs),
                                    -startTimelineMs_);
-  if (state_ == CompetitionState::WAIT_START && realTimeMs_ >= 0)
-    state_ = CompetitionState::RUNNING;
+  if (state_ == CompetitionState::WAIT_START) {
+    if (realTimeMs_ >= 0) {
+      state_ = CompetitionState::RUNNING;
+    } else if (stageIndex_ > 0) {
+      // A stage after JAT has no running competition clock before its accepted
+      // start. The completed stage result remains in finalDeltaMs_.
+      realTimeMs_ = 0;
+      idealTimeMs_ = 0;
+      deltaMs_ = 0;
+      return;
+    }
+  }
   idealTimeMs_ = saturatingAddInt64(idealBeforeSegmentMs_,
                                     activeSegmentIdealMs());
   deltaMs_ = saturatingAddInt64(idealTimeMs_, -realTimeMs_);
@@ -289,6 +299,8 @@ PointResult CompetitionEngine::finishJat(
   ++stageIndex_;
   idealBeforeSegmentMs_ = 0;
   idealTimeMs_ = 0;
+  realTimeMs_ = 0;
+  deltaMs_ = 0;
   stageDistanceMm_ = 0;
   segmentDistanceMm_ = 0;
   distanceWhileMittisPendingMm_ = 0;

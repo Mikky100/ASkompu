@@ -1,6 +1,7 @@
 #include "ApplicationCore.h"
 
 #include <cstddef>
+#include <cstdio>
 #include <limits>
 
 #include "domain/CalibrationSetting.h"
@@ -8,6 +9,8 @@
 
 namespace core {
 namespace {
+
+constexpr uint64_t MITTIS_TRIP_DISPLAY_FREEZE_MS = 10000ULL;
 
 domain::EventClockTime eventClock(const ClockTime& value) {
   return {value.hour, value.minute, value.second};
@@ -51,16 +54,15 @@ constexpr MenuItem MAIN_ITEMS[] = {
     {"JARJESTELMA", true},
 };
 constexpr MenuItem RESULT_ITEMS[] = {{"JAKSOJEN PISTEET", true},
-                                     {"KOKONAISPISTEET", true},
                                      {"TAPAHTUMAT", true}};
-constexpr MenuItem DISPLAY_ITEMS[] = {{"NAYTTOPROFIILI", false},
-                                      {"NAYTTOSELITTEET", false},
-                                      {"AIKAERON MUOTO", false},
-                                      {"TRIP-TARKKUUS", false},
-                                      {"TEKSTIN VARI", true}};
+constexpr MenuItem DISPLAY_ITEMS[] = {{"KIRKKAUS", true},
+                                      {"TEKSTIN VARI", true},
+                                      {"NAYTTOSELITTEET", true}};
 constexpr MenuItem TEXT_COLOR_ITEMS[] = {{"VALKOINEN", true},
                                          {"PUNAINEN", true},
                                          {"VIHREA", true}};
+constexpr MenuItem BRIGHTNESS_ITEMS[] = {{"KIRKKAUS", true}};
+constexpr MenuItem DISPLAY_LABEL_ITEMS[] = {{"SELITTEET", true}};
 constexpr MenuItem TRIP_ITEMS[] = {{"NOLLAA TRIP 1", true},
                                    {"NOLLAA TRIP 2", true},
                                    {"ULKOINEN TRIP", false}};
@@ -93,6 +95,14 @@ const MenuItem* itemsFor(MenuPage page, uint8_t& count, const char*& title) {
       title = "TEKSTIN VARI";
       count = countOf(TEXT_COLOR_ITEMS);
       return TEXT_COLOR_ITEMS;
+    case MenuPage::Brightness:
+      title = "KIRKKAUS";
+      count = countOf(BRIGHTNESS_ITEMS);
+      return BRIGHTNESS_ITEMS;
+    case MenuPage::DisplayLabels:
+      title = "NAYTTOSELITTEET";
+      count = countOf(DISPLAY_LABEL_ITEMS);
+      return DISPLAY_LABEL_ITEMS;
     case MenuPage::Trips:
       title = "TRIPIT";
       count = countOf(TRIP_ITEMS);
@@ -233,6 +243,7 @@ void ApplicationCore::handleButton(const ButtonEvent& event) {
           makeEvent(domain::DomainEventType::NORMAL_POINT);
       record.segmentIndex = endedSegment;
       lastPointEventId_ = appendEvent(record);
+      updateMittisTripStart();
     } else if (result == domain::PointResult::JAT_COMPLETED) {
       domain::EventRecord record = makeEvent(domain::DomainEventType::JAT);
       record.segmentIndex = endedSegment;
@@ -379,7 +390,7 @@ void ApplicationCore::handleResultView(const ButtonEvent& event) {
   else if (event.eventType == ButtonEventType::Press &&
            event.buttonId == ButtonId::Left) {
     openSubmenu(MenuPage::Results);
-    menuSelectedIndex_ = static_cast<uint8_t>(resultViewType_);
+    menuSelectedIndex_ = resultViewType_ == ResultViewType::StageResults ? 0 : 1;
   }
 }
 
@@ -688,6 +699,12 @@ void ApplicationCore::handleBasicView(const ButtonEvent& event) {
   if (event.eventType != ButtonEventType::Press) {
     return;
   }
+  if (competition_.state() == domain::CompetitionState::FINISHED &&
+      (event.buttonId == ButtonId::Left ||
+       event.buttonId == ButtonId::Right)) {
+    finishResultDismissed_ = true;
+    return;
+  }
   if (event.buttonId == ButtonId::Down) {
     openMainMenu(0);
   } else if (event.buttonId == ButtonId::Up) {
@@ -706,6 +723,82 @@ void ApplicationCore::handleBasicView(const ButtonEvent& event) {
 void ApplicationCore::handleMenu(const ButtonEvent& event) {
   const bool step = event.eventType == ButtonEventType::Press ||
                     event.eventType == ButtonEventType::LongRepeat;
+  if (menuPage_ == MenuPage::Brightness) {
+    if (step && event.buttonId == ButtonId::Up) {
+      editedDisplaySettings_.backlightPercent =
+          editedDisplaySettings_.backlightPercent >=
+                  domain::MAX_BACKLIGHT_PERCENT
+              ? domain::MIN_BACKLIGHT_PERCENT
+              : static_cast<uint8_t>(editedDisplaySettings_.backlightPercent +
+                                     domain::BACKLIGHT_STEP_PERCENT);
+    } else if (step && event.buttonId == ButtonId::Down) {
+      editedDisplaySettings_.backlightPercent =
+          editedDisplaySettings_.backlightPercent <=
+                  domain::MIN_BACKLIGHT_PERCENT
+              ? domain::MAX_BACKLIGHT_PERCENT
+              : static_cast<uint8_t>(editedDisplaySettings_.backlightPercent -
+                                     domain::BACKLIGHT_STEP_PERCENT);
+    } else if (event.eventType == ButtonEventType::Press &&
+               event.buttonId == ButtonId::Left) {
+      editedDisplaySettings_ = displaySettings_;
+      openSubmenu(MenuPage::Display);
+    } else if (event.eventType == ButtonEventType::Press &&
+               event.buttonId == ButtonId::Right &&
+               !displaySettingsSaveInFlight_) {
+      if (editedDisplaySettings_.backlightPercent ==
+          displaySettings_.backlightPercent) {
+        openSubmenu(MenuPage::Display);
+      } else {
+        displaySettingsSavePending_ = true;
+      }
+    }
+    return;
+  }
+  if (menuPage_ == MenuPage::DisplayLabels) {
+    if (step && (event.buttonId == ButtonId::Up ||
+                 event.buttonId == ButtonId::Down)) {
+      editedDisplaySettings_.showLabels =
+          !editedDisplaySettings_.showLabels;
+    } else if (event.eventType == ButtonEventType::Press &&
+               event.buttonId == ButtonId::Left) {
+      editedDisplaySettings_ = displaySettings_;
+      openSubmenu(MenuPage::Display);
+      menuSelectedIndex_ = 2;
+    } else if (event.eventType == ButtonEventType::Press &&
+               event.buttonId == ButtonId::Right &&
+               !displaySettingsSaveInFlight_) {
+      if (editedDisplaySettings_.showLabels == displaySettings_.showLabels) {
+        openSubmenu(MenuPage::Display);
+        menuSelectedIndex_ = 2;
+      } else {
+        displaySettingsSavePending_ = true;
+      }
+    }
+    return;
+  }
+  if (menuPage_ == MenuPage::Debug) {
+    if (step && (event.buttonId == ButtonId::Up ||
+                 event.buttonId == ButtonId::Down)) {
+      editedDebugDisplaySettings_.enabledElements ^=
+          static_cast<uint16_t>(domain::DebugDisplayElement::SPEED);
+    } else if (event.eventType == ButtonEventType::Press &&
+               event.buttonId == ButtonId::Left) {
+      editedDebugDisplaySettings_ = debugDisplaySettings_;
+      openSubmenu(MenuPage::System);
+      menuSelectedIndex_ = 1;
+    } else if (event.eventType == ButtonEventType::Press &&
+               event.buttonId == ButtonId::Right &&
+               !debugDisplaySaveInFlight_) {
+      if (editedDebugDisplaySettings_.enabledElements ==
+          debugDisplaySettings_.enabledElements) {
+        openSubmenu(MenuPage::System);
+        menuSelectedIndex_ = 1;
+      } else {
+        debugDisplaySavePending_ = true;
+      }
+    }
+    return;
+  }
   const uint8_t count = menuItemCount();
   if (step && event.buttonId == ButtonId::Up) {
     if (menuSelectedIndex_ > 0) {
@@ -727,8 +820,6 @@ void ApplicationCore::handleMenu(const ButtonEvent& event) {
       screen_ = Screen::BasicView;
     } else if (menuPage_ == MenuPage::TextColor) {
       openSubmenu(MenuPage::Display);
-    } else if (menuPage_ == MenuPage::Debug) {
-      openSubmenu(MenuPage::System);
       menuSelectedIndex_ = 1;
     } else {
       openMainMenu(mainMenuSelectedIndex_);
@@ -743,12 +834,18 @@ void ApplicationCore::handleCalibration(const ButtonEvent& event) {
   const bool step = event.eventType == ButtonEventType::Press ||
                     event.eventType == ButtonEventType::LongRepeat;
   if (step && event.buttonId == ButtonId::Up) {
-    editedMillimetersPerPulse_ =
-        domain::calibration::increment(editedMillimetersPerPulse_);
+    const uint8_t increments =
+        event.eventType == ButtonEventType::LongRepeat ? 10 : 1;
+    for (uint8_t index = 0; index < increments; ++index)
+      editedMillimetersPerPulse_ =
+          domain::calibration::increment(editedMillimetersPerPulse_);
     calibrationSaveFailed_ = false;
   } else if (step && event.buttonId == ButtonId::Down) {
-    editedMillimetersPerPulse_ =
-        domain::calibration::decrement(editedMillimetersPerPulse_);
+    const uint8_t decrements =
+        event.eventType == ButtonEventType::LongRepeat ? 10 : 1;
+    for (uint8_t index = 0; index < decrements; ++index)
+      editedMillimetersPerPulse_ =
+          domain::calibration::decrement(editedMillimetersPerPulse_);
     calibrationSaveFailed_ = false;
   } else if (event.eventType == ButtonEventType::Press &&
              event.buttonId == ButtonId::Left) {
@@ -846,9 +943,8 @@ void ApplicationCore::activateMenuItem() {
   if (menuPage_ == MenuPage::Main) {
     mainMenuSelectedIndex_ = menuSelectedIndex_;
     if (menuSelectedIndex_ == 0) {
-      if (competition_.state() == domain::CompetitionState::WAIT_START ||
-          competition_.state() == domain::CompetitionState::RUNNING) {
-        orderAccessAction_ = OrderAccessAction::Edit;
+      if (hasRouteOrder_) {
+        orderAccessAction_ = OrderAccessAction::Replace;
         screen_ = Screen::OrderAccessPrompt;
         return;
       }
@@ -876,14 +972,21 @@ void ApplicationCore::activateMenuItem() {
     openSubmenu(PAGES[menuSelectedIndex_ - 3]);
     return;
   }
-  if (menuPage_ == MenuPage::Display && menuSelectedIndex_ == 4) {
+  if (menuPage_ == MenuPage::Display && menuSelectedIndex_ == 0) {
+    editedDisplaySettings_ = displaySettings_;
+    openSubmenu(MenuPage::Brightness);
+  } else if (menuPage_ == MenuPage::Display && menuSelectedIndex_ == 1) {
     openSubmenu(MenuPage::TextColor);
     menuSelectedIndex_ = static_cast<uint8_t>(textColor_);
+  } else if (menuPage_ == MenuPage::Display && menuSelectedIndex_ == 2) {
+    editedDisplaySettings_ = displaySettings_;
+    openSubmenu(MenuPage::DisplayLabels);
   } else if (menuPage_ == MenuPage::TextColor) {
     editedTextColor_ = static_cast<domain::TextColor>(menuSelectedIndex_);
     textColorSavePending_ = true;
   } else if (menuPage_ == MenuPage::Results) {
-    resultViewType_ = static_cast<ResultViewType>(menuSelectedIndex_);
+    resultViewType_ = menuSelectedIndex_ == 0 ? ResultViewType::StageResults
+                                              : ResultViewType::Events;
     resultSelectedIndex_ = 0;
     screen_ = Screen::ResultView;
   } else if (menuPage_ == MenuPage::Trips) {
@@ -895,14 +998,8 @@ void ApplicationCore::activateMenuItem() {
   } else if (menuPage_ == MenuPage::System && menuSelectedIndex_ == 0) {
     screen_ = Screen::Diagnostics;
   } else if (menuPage_ == MenuPage::System && menuSelectedIndex_ == 1) {
-    openSubmenu(MenuPage::Debug);
-  } else if (menuPage_ == MenuPage::Debug && menuSelectedIndex_ == 0) {
     editedDebugDisplaySettings_ = debugDisplaySettings_;
-    editedDebugDisplaySettings_.enabledElements ^=
-        static_cast<uint16_t>(domain::DebugDisplayElement::SPEED);
-    debugDisplaySavePending_ =
-        editedDebugDisplaySettings_.enabledElements !=
-        debugDisplaySettings_.enabledElements;
+    openSubmenu(MenuPage::Debug);
   }
 }
 
@@ -934,6 +1031,24 @@ void ApplicationCore::resetTrip2() {
   domain::EventRecord record = makeEvent(domain::DomainEventType::TRIP_RESET);
   record.payload.tripChannel = domain::TripChannel::TRIP_2;
   appendEvent(record);
+}
+
+void ApplicationCore::updateMittisTripStart() {
+  if (competition_.state() != domain::CompetitionState::RUNNING) return;
+  const domain::SegmentDefinition* segment = competition_.currentSegment();
+  if (!segment || segment->segmentType != domain::SegmentType::MITTIS) {
+    mittisTripSegmentIndex_ = 0xFFFFU;
+    trip1DisplayFreezeActive_ = false;
+    return;
+  }
+  const uint16_t segmentIndex = competition_.currentSegmentIndex();
+  if (mittisTripSegmentIndex_ == segmentIndex) return;
+  mittisTripSegmentIndex_ = segmentIndex;
+  resetTrip1();
+  trip1DisplayFrozenMm_ = trip1DistanceMm_;
+  trip1DisplayFreezeActive_ = true;
+  trip1DisplayFreezeUntilMs_ =
+      clock_.elapsedSinceSetMilliseconds() + MITTIS_TRIP_DISPLAY_FREEZE_MS;
 }
 
 void ApplicationCore::handleDistancePulses(const DistancePulseEvent& event) {
@@ -995,6 +1110,10 @@ void ApplicationCore::tick(uint32_t nowUs) {
     clock_.now();
     const domain::CompetitionState before = competition_.state();
     competition_.tick(clock_.elapsedSinceSetMilliseconds());
+    updateMittisTripStart();
+    if (trip1DisplayFreezeActive_ &&
+        clock_.elapsedSinceSetMilliseconds() >= trip1DisplayFreezeUntilMs_)
+      trip1DisplayFreezeActive_ = false;
     if (before == domain::CompetitionState::JAT_RESULT &&
         competition_.state() == domain::CompetitionState::EDIT_START_TIME)
       beginJatStartTimeEdit();
@@ -1031,11 +1150,18 @@ DisplayModel ApplicationCore::displayModel() const {
   DisplayModel model{};
   model.screen = screen_;
   model.textColor = textColor_;
+  model.backlightPercent =
+      menuPage_ == MenuPage::Brightness && screen_ == Screen::Menu
+          ? editedDisplaySettings_.backlightPercent
+          : displaySettings_.backlightPercent;
+  model.showLabels = displaySettings_.showLabels;
   model.clock = clock_.isSet() ? clock_.now() : ClockTime{0, 0, 0};
   model.speedKmh = speedCalculator_.speedKmh();
   model.showSpeed = debugDisplaySettings_.enabled(
       domain::DebugDisplayElement::SPEED);
-  model.trip1 = {trip1DistanceMm_, true};
+  model.trip1 = {trip1DisplayFreezeActive_ ? trip1DisplayFrozenMm_
+                                           : trip1DistanceMm_,
+                 true};
   model.trip2 = {trip2DistanceMm_, true};
   model.timeEntry = {editedHour_, editedMinute_, activeTimeField_,
                      startupTimeEdit_};
@@ -1052,7 +1178,7 @@ DisplayModel ApplicationCore::displayModel() const {
                      competitionSettings_.atDisplayDistanceM};
   model.jatResult = {competition_.arrivalClockTime(),
                      competition_.finalDeltaMs() / 1000};
-  model.finishResult.visible =
+  model.finishResult.visible = !finishResultDismissed_ &&
       competition_.state() == domain::CompetitionState::FINISHED &&
       !competition_.stageResults().empty();
   model.finishResult.totalPoints = competition_.totalPoints();
@@ -1101,20 +1227,29 @@ DisplayModel ApplicationCore::displayModel() const {
   model.orderAccess.selectedAction = orderAccessAction_;
   model.order.hasSelectedSegment = false;
   model.order.showsStartTime = false;
-  model.competition.state = competition_.state();
+  model.competition.state =
+      finishResultDismissed_ ? domain::CompetitionState::IDLE
+                             : competition_.state();
   model.competition.deltaSeconds = competition_.deltaSeconds();
   model.competition.deltaFrozen = competition_.deltaFrozen();
   model.competition.undoPromptVisible = competition_.hasUndoPrompt(
       clock_.isSet() ? clock_.elapsedSinceSetMilliseconds() : 0);
   const domain::SegmentDefinition* current = competition_.currentSegment();
-  if (current) {
-    model.competition.currentSegment = *current;
-    model.competition.hasCurrentSegment = true;
-  }
-  const domain::SegmentDefinition* next = competition_.nextSegment();
-  if (next) {
-    model.competition.nextSegment = *next;
-    model.competition.hasNextSegment = true;
+  if (competition_.state() == domain::CompetitionState::WAIT_START) {
+    if (current) {
+      model.competition.nextSegment = *current;
+      model.competition.hasNextSegment = true;
+    }
+  } else {
+    if (current) {
+      model.competition.currentSegment = *current;
+      model.competition.hasCurrentSegment = true;
+    }
+    const domain::SegmentDefinition* next = competition_.nextSegment();
+    if (next) {
+      model.competition.nextSegment = *next;
+      model.competition.hasNextSegment = true;
+    }
   }
   if (screen_ == Screen::OrderEdit &&
       model.order.editor.phase == route::EditorPhase::BROWSE) {
@@ -1146,9 +1281,20 @@ DisplayModel ApplicationCore::displayModel() const {
       model.menu.rows[index] = {item.label, item.enabled};
       if (menuPage_ == MenuPage::Debug && menuScrollOffset_ + index == 0) {
         model.menu.rows[index].label =
-            debugDisplaySettings_.enabled(domain::DebugDisplayElement::SPEED)
+            editedDebugDisplaySettings_.enabled(
+                domain::DebugDisplayElement::SPEED)
                 ? "NOPEUS: PAALLA"
                 : "NOPEUS: POIS";
+      } else if (menuPage_ == MenuPage::Brightness && index == 0) {
+        static char brightnessLabel[24];
+        std::snprintf(brightnessLabel, sizeof(brightnessLabel),
+                      "KIRKKAUS: %u%%",
+                      editedDisplaySettings_.backlightPercent);
+        model.menu.rows[index].label = brightnessLabel;
+      } else if (menuPage_ == MenuPage::DisplayLabels && index == 0) {
+        model.menu.rows[index].label = editedDisplaySettings_.showLabels
+                                           ? "SELITTEET: PAALLA"
+                                           : "SELITTEET: POIS";
       }
     }
   }
@@ -1257,7 +1403,7 @@ void ApplicationCore::completeTextColorSave(bool succeeded) {
   textColorSaveInFlight_ = false;
   if (succeeded) textColor_ = editedTextColor_;
   openSubmenu(MenuPage::Display);
-  menuSelectedIndex_ = 4;
+  menuSelectedIndex_ = 1;
   updateMenuScroll();
 }
 
@@ -1284,7 +1430,35 @@ void ApplicationCore::completeDebugDisplaySettingsSave(bool succeeded) {
   debugDisplaySaveInFlight_ = false;
   if (succeeded) debugDisplaySettings_ = editedDebugDisplaySettings_;
   editedDebugDisplaySettings_ = debugDisplaySettings_;
-  openSubmenu(MenuPage::Debug);
+  openSubmenu(MenuPage::System);
+  menuSelectedIndex_ = 1;
+}
+
+void ApplicationCore::setInitialDisplaySettings(
+    const domain::DisplaySettings& settings) {
+  displaySettings_ = domain::validatedDisplaySettings(settings);
+  editedDisplaySettings_ = displaySettings_;
+}
+
+bool ApplicationCore::takeDisplaySettingsSaveRequest(
+    domain::DisplaySettings& settings) {
+  if (!displaySettingsSavePending_ || displaySettingsSaveInFlight_ ||
+      !domain::isValidDisplaySettings(editedDisplaySettings_))
+    return false;
+  displaySettingsSavePending_ = false;
+  displaySettingsSaveInFlight_ = true;
+  settings = editedDisplaySettings_;
+  return true;
+}
+
+void ApplicationCore::completeDisplaySettingsSave(bool succeeded) {
+  if (!displaySettingsSaveInFlight_) return;
+  displaySettingsSaveInFlight_ = false;
+  if (succeeded) displaySettings_ = editedDisplaySettings_;
+  editedDisplaySettings_ = displaySettings_;
+  const bool labels = menuPage_ == MenuPage::DisplayLabels;
+  openSubmenu(MenuPage::Display);
+  menuSelectedIndex_ = labels ? 2 : 0;
 }
 
 void ApplicationCore::setInitialRouteOrder(const domain::RouteOrder& order,
@@ -1328,6 +1502,9 @@ void ApplicationCore::activateCurrentRouteOrder() {
       1000UL;
   if (competition_.activate(currentRouteOrder_, millisecondsOfDay,
                             clock_.elapsedSinceSetMilliseconds())) {
+    mittisTripSegmentIndex_ = 0xFFFFU;
+    trip1DisplayFreezeActive_ = false;
+    finishResultDismissed_ = false;
     domain::EventRecord accepted =
         makeEvent(domain::DomainEventType::START_TIME_ACCEPTED);
     accepted.payload.acceptedStartClockTime =

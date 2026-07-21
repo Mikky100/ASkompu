@@ -14,10 +14,12 @@
 
 namespace {
 
-constexpr uint32_t DEBOUNCE_MS = 35;
+constexpr uint32_t DEBOUNCE_MS = 20;
 constexpr uint32_t POLL_INTERVAL_MS = 10;
-constexpr uint32_t POINT_LONG_PRESS_MS = 1200;
+constexpr uint32_t POINT_LONG_PRESS_MS = 2000;
+constexpr uint32_t POINT_MINIMUM_PRESS_INTERVAL_MS = 500;
 constexpr uint32_t REVERSE_STABILITY_MS = 20;
+constexpr uint32_t RIGHT_MINIMUM_PRESS_INTERVAL_MS = 350;
 
 input::DebouncedButton leftButton(BoardConfig::PIN_BUTTON_LEFT,
                                   BoardConfig::BUTTON_PRESSED_LEVEL,
@@ -36,10 +38,11 @@ input::DebouncedButton rightButton(BoardConfig::PIN_BUTTON_RIGHT,
                                    BoardConfig::BUTTON_PRESSED_LEVEL,
                                    DEBOUNCE_MS,
                                    CalibrationConfig::LONG_PRESS_DELAY_MS,
-                                   0);
+                                   0, RIGHT_MINIMUM_PRESS_INTERVAL_MS);
 input::DebouncedButton pointButton(BoardConfig::PIN_BUTTON_POINT,
                                    BoardConfig::BUTTON_PRESSED_LEVEL,
-                                   DEBOUNCE_MS, POINT_LONG_PRESS_MS, 0);
+                                   DEBOUNCE_MS, POINT_LONG_PRESS_MS, 0,
+                                   POINT_MINIMUM_PRESS_INTERVAL_MS);
 input::DebouncedButton atButton(BoardConfig::PIN_BUTTON_AT,
                                 BoardConfig::BUTTON_PRESSED_LEVEL,
                                 DEBOUNCE_MS);
@@ -71,36 +74,88 @@ settings::PreferencesRouteOrderStore routeOrderStore;
 ui::DisplayView view;
 uint32_t lastDisplayUpdateMs = 0;
 core::Screen renderedScreen = core::Screen::StartupTimeEntry;
+bool pointLongPressPending = false;
 
-void dispatchButton(input::DebouncedButton& button, core::ButtonId id,
+bool dispatchButton(input::DebouncedButton& button, core::ButtonId id,
                     uint32_t nowMs) {
+  bool dispatched = false;
   if (button.consumePressedEvent()) {
     application.handleButton({id, core::ButtonEventType::Press, nowMs});
+    dispatched = true;
   }
   if (button.consumeReleasedEvent()) {
     application.handleButton({id, core::ButtonEventType::Release, nowMs});
+    dispatched = dispatched || id == core::ButtonId::At ||
+                 application.screen() == core::Screen::Diagnostics;
   }
   if (button.consumeLongPressEvent()) {
     application.handleButton({id, core::ButtonEventType::LongStart, nowMs});
+    dispatched = true;
   }
   if (button.consumeRepeatEvent()) {
     application.handleButton({id, core::ButtonEventType::LongRepeat, nowMs});
+    dispatched = true;
   }
+  return dispatched;
 }
 
-void dispatchPointButton(uint32_t nowMs) {
-  if (pointButton.consumePressedEvent())
+bool dispatchPointButton(uint32_t nowMs) {
+  bool dispatched = false;
+  if (pointButton.consumePressedEvent()) {
+    pointLongPressPending = false;
     application.handleButton(
         {core::ButtonId::Point, core::ButtonEventType::Press, nowMs});
-  if (pointButton.consumeLongPressEvent())
-    application.handleButton(
-        {core::ButtonId::Point, core::ButtonEventType::LongStart, nowMs});
+    dispatched = application.screen() == core::Screen::Diagnostics;
+  }
+  if (pointButton.consumeLongPressEvent()) {
+    // Do not open the override menu while the contact is still held. Requiring
+    // a stable release makes an additional-order request deliberate and keeps
+    // a delayed/bounced normal point press from being interpreted as long.
+    pointLongPressPending = true;
+  }
   if (pointButton.consumeReleasedEvent()) {
     const bool shortPress = pointButton.consumeShortPressEvent();
-    if (shortPress)
+    if (pointLongPressPending) {
+      pointLongPressPending = false;
+      application.handleButton(
+          {core::ButtonId::Point, core::ButtonEventType::LongStart, nowMs});
+      dispatched = true;
+    } else if (shortPress) {
       application.handleButton(
           {core::ButtonId::Point, core::ButtonEventType::Release, nowMs});
+      dispatched = true;
+    }
   }
+  return dispatched;
+}
+
+bool dispatchRightButton(uint32_t nowMs) {
+  bool dispatched = false;
+  const bool diagnostics = application.screen() == core::Screen::Diagnostics;
+  if (rightButton.consumePressedEvent() && diagnostics) {
+    application.handleButton({core::ButtonId::Right,
+                              core::ButtonEventType::Press, nowMs});
+    dispatched = true;
+  }
+  if (rightButton.consumeLongPressEvent()) {
+    application.handleButton({core::ButtonId::Right,
+                              core::ButtonEventType::LongStart, nowMs});
+    dispatched = true;
+  }
+  if (rightButton.consumeReleasedEvent()) {
+    const bool shortPress = rightButton.consumeShortPressEvent();
+    if (diagnostics) {
+      application.handleButton({core::ButtonId::Right,
+                                core::ButtonEventType::Release, nowMs});
+      dispatched = true;
+    } else if (shortPress) {
+      // Navigation is committed only after a complete, stable press/release.
+      application.handleButton({core::ButtonId::Right,
+                                core::ButtonEventType::Press, nowMs});
+      dispatched = true;
+    }
+  }
+  return dispatched;
 }
 
 }  // namespace
@@ -118,6 +173,8 @@ void setup() {
       settingsRepository.loadCompetitionSettings().settings);
   application.setInitialDebugDisplaySettings(
       settingsRepository.loadDebugDisplaySettings().settings);
+  application.setInitialDisplaySettings(
+      settingsRepository.loadDisplaySettings().settings);
   Serial.printf("Calibration: %lu mm/pulse%s\n",
                 static_cast<unsigned long>(calibration.millimetersPerPulse),
                 calibration.usedDefault ? " (default)" : " (NVS)");
@@ -192,26 +249,23 @@ void loop() {
   const input::PulseSnapshot pulseSnapshot = pulseInput.consumeSnapshot();
   const uint32_t nowUs = clockSource.monotonicMicroseconds();
 
-  dispatchButton(leftButton, core::ButtonId::Left, nowMs);
-  dispatchButton(upButton, core::ButtonId::Up, nowMs);
-  dispatchButton(downButton, core::ButtonId::Down, nowMs);
-  dispatchButton(rightButton, core::ButtonId::Right, nowMs);
-  dispatchPointButton(nowMs);
-  dispatchButton(atButton, core::ButtonId::At, nowMs);
-  dispatchButton(trip2ResetButton, core::ButtonId::Trip2Reset, nowMs);
+  bool inputDispatched = false;
+  inputDispatched |= dispatchButton(leftButton, core::ButtonId::Left, nowMs);
+  inputDispatched |= dispatchButton(upButton, core::ButtonId::Up, nowMs);
+  inputDispatched |= dispatchButton(downButton, core::ButtonId::Down, nowMs);
+  inputDispatched |= dispatchRightButton(nowMs);
+  inputDispatched |= dispatchPointButton(nowMs);
+  inputDispatched |= dispatchButton(atButton, core::ButtonId::At, nowMs);
+  inputDispatched |=
+      dispatchButton(trip2ResetButton, core::ButtonId::Trip2Reset, nowMs);
 #ifdef ASKOMPU_HAS_TRIP1_RESET_PIN
-  dispatchButton(trip1ResetButton, core::ButtonId::Trip1Reset, nowMs);
+  inputDispatched |=
+      dispatchButton(trip1ResetButton, core::ButtonId::Trip1Reset, nowMs);
 #endif
 #ifdef ASKOMPU_HAS_FOOT_RESET_PIN
-  dispatchButton(footResetButton, core::ButtonId::FootReset, nowMs);
+  inputDispatched |=
+      dispatchButton(footResetButton, core::ButtonId::FootReset, nowMs);
 #endif
-
-  if (pulseSnapshot.pendingPulses > 0) {
-    Serial.printf("GPIO%u pulses: %lu, total: %lu\n",
-                  static_cast<unsigned>(BoardConfig::PIN_PULSE_INPUT),
-                  static_cast<unsigned long>(pulseSnapshot.pendingPulses),
-                  static_cast<unsigned long>(pulseSnapshot.totalPulses));
-  }
 
   application.handleDistancePulses(
       {pulseSnapshot.pendingPulses, pulseSnapshot.previousPulseAtUs,
@@ -240,6 +294,12 @@ void loop() {
         settingsRepository.saveDebugDisplaySettings(debugSettingsToSave));
   }
 
+  domain::DisplaySettings displaySettingsToSave;
+  if (application.takeDisplaySettingsSaveRequest(displaySettingsToSave)) {
+    application.completeDisplaySettingsSave(
+        settingsRepository.saveDisplaySettings(displaySettingsToSave));
+  }
+
   const domain::RouteOrder* orderToSave = nullptr;
   if (application.takeRouteOrderSaveRequest(orderToSave)) {
     const bool saved = orderToSave && routeOrderStore.replace(*orderToSave);
@@ -252,8 +312,17 @@ void loop() {
 
   const core::DisplayModel displayModel = application.displayModel();
   const bool screenChanged = displayModel.screen != renderedScreen;
-  if (screenChanged ||
-      nowMs - lastDisplayUpdateMs >= BoardConfig::DISPLAY_UPDATE_INTERVAL_MS) {
+  const bool periodicScreen =
+      displayModel.screen == core::Screen::BasicView ||
+      displayModel.screen == core::Screen::StartTimeEdit ||
+      displayModel.screen == core::Screen::Diagnostics;
+  const uint32_t periodicIntervalMs =
+      displayModel.screen == core::Screen::Diagnostics
+          ? 2000UL
+          : BoardConfig::DISPLAY_UPDATE_INTERVAL_MS;
+  if (inputDispatched || screenChanged ||
+      (periodicScreen &&
+       nowMs - lastDisplayUpdateMs >= periodicIntervalMs)) {
     view.render(displayModel);
     renderedScreen = displayModel.screen;
     lastDisplayUpdateMs = nowMs;

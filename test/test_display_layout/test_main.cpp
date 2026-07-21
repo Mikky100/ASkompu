@@ -12,7 +12,6 @@ namespace {
 void assertAllInside(const ui::DisplayLayout& layout) {
   TEST_ASSERT_TRUE(ui::isInside(layout.trip1, layout.width, layout.height));
   TEST_ASSERT_TRUE(ui::isInside(layout.clock, layout.width, layout.height));
-  TEST_ASSERT_TRUE(ui::isInside(layout.trip2, layout.width, layout.height));
   TEST_ASSERT_TRUE(
       ui::isInside(layout.currentSegment, layout.width, layout.height));
   TEST_ASSERT_TRUE(ui::isInside(layout.delta, layout.width, layout.height));
@@ -42,8 +41,6 @@ void testTopRowWidgetsDoNotOverlap() {
   for (const ui::DisplayLayout layout : {ui::layoutFor(320, 170),
                                          ui::layoutFor(480, 320)}) {
     TEST_ASSERT_FALSE(ui::overlaps(layout.trip1, layout.clock));
-    TEST_ASSERT_FALSE(ui::overlaps(layout.clock, layout.trip2));
-    TEST_ASSERT_FALSE(ui::overlaps(layout.trip1, layout.trip2));
   }
 }
 
@@ -109,15 +106,21 @@ void testProfilesUseDifferentMeasurementsAndSameSemanticOrder() {
   const ui::DisplayLayout large = ui::layoutFor(480, 320);
   TEST_ASSERT_NOT_EQUAL(small.delta.width, large.delta.width);
   TEST_ASSERT_TRUE(small.trip1.right() <= small.clock.x);
-  TEST_ASSERT_TRUE(small.trip2.right() <= small.clock.x);
-  TEST_ASSERT_TRUE(small.trip1.bottom() <= small.trip2.y);
   TEST_ASSERT_TRUE(large.trip1.right() <= large.clock.x);
-  TEST_ASSERT_TRUE(large.trip2.right() <= large.clock.x);
-  TEST_ASSERT_TRUE(large.trip1.bottom() <= large.trip2.y);
   TEST_ASSERT_TRUE(small.currentSegment.x < small.delta.x);
   TEST_ASSERT_TRUE(small.delta.x < small.nextSegment.x);
   TEST_ASSERT_TRUE(large.currentSegment.x < large.delta.x);
   TEST_ASSERT_TRUE(large.delta.x < large.nextSegment.x);
+}
+
+void testCompetitionLayoutEmphasizesDeltaOverSideValues() {
+  for (const ui::DisplayLayout layout : {ui::layoutFor(320, 170),
+                                         ui::layoutFor(480, 320)}) {
+    TEST_ASSERT_TRUE(layout.delta.width > layout.currentSegment.width);
+    TEST_ASSERT_TRUE(layout.delta.width > layout.nextSegment.width);
+    TEST_ASSERT_TRUE(layout.deltaFont.value > layout.segmentFont.value);
+    TEST_ASSERT_TRUE(layout.deltaFont.value > layout.segmentValueFont.value);
+  }
 }
 
 void testBottomTenPercentIsReservedForFooter() {
@@ -145,6 +148,7 @@ int main(int, char**) {
   RUN_TEST(testMissingNextSegmentCannotMoveDeltaGeometry);
   RUN_TEST(testDebugSpeedDoesNotOverlapCompetitionValues);
   RUN_TEST(testProfilesUseDifferentMeasurementsAndSameSemanticOrder);
+  RUN_TEST(testCompetitionLayoutEmphasizesDeltaOverSideValues);
   RUN_TEST(testBottomTenPercentIsReservedForFooter);
   return UNITY_END();
 }

@@ -238,7 +238,8 @@ void testJatCompletesStageAtomically() {
                           static_cast<uint8_t>(engine.pointReleased(
                               5000, 1000, {12, 0, 5}, {})));
   TEST_ASSERT_EQUAL_UINT16(1, engine.currentSegmentIndex());
-  TEST_ASSERT_EQUAL_INT64(delta, engine.deltaMs());
+  TEST_ASSERT_EQUAL_INT64(0, engine.deltaMs());
+  TEST_ASSERT_EQUAL_INT64(delta, engine.finalDeltaMs());
   TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(domain::CompetitionState::JAT_RESULT),
                           static_cast<uint8_t>(engine.state()));
   TEST_ASSERT_TRUE(engine.deltaFrozen());
@@ -320,6 +321,15 @@ void testJatAcceptedFutureAndPastStartTimes() {
   TEST_ASSERT_TRUE(future.acceptNextStageStart(
       {12, 1, 0}, 12UL * 3600UL * 1000UL, 0));
   TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(domain::CompetitionState::WAIT_START),
+                          static_cast<uint8_t>(future.state()));
+  TEST_ASSERT_EQUAL_INT64(0, future.deltaMs());
+  TEST_ASSERT_EQUAL_INT64(0, future.realTimeMs());
+  future.tick(59000);
+  TEST_ASSERT_EQUAL_INT64(0, future.deltaMs());
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(domain::CompetitionState::WAIT_START),
+                          static_cast<uint8_t>(future.state()));
+  future.tick(60000);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(domain::CompetitionState::RUNNING),
                           static_cast<uint8_t>(future.state()));
 
   domain::CompetitionEngine past;
@@ -619,6 +629,11 @@ void testMannedJatUsesRightAndPointIsIgnoredDuringStartEdit() {
   press(app, core::ButtonId::Right);
   TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(domain::CompetitionState::WAIT_START),
                           static_cast<uint8_t>(app.competition().state()));
+  const core::CompetitionDisplayModel waiting =
+      app.displayModel().competition;
+  TEST_ASSERT_FALSE(waiting.hasCurrentSegment);
+  TEST_ASSERT_TRUE(waiting.hasNextSegment);
+  TEST_ASSERT_EQUAL_UINT32(20, waiting.nextSegment.value);
   TEST_ASSERT_EQUAL_size_t(1, app.competition().stageResults().size());
 }
 
@@ -765,6 +780,32 @@ void testFinishRequestsPersistentCompletion() {
   TEST_ASSERT_FALSE(app.takeRouteOrderCompletionRequest());
 }
 
+void testFinishResultDismissesWithEitherHorizontalButton() {
+  for (const core::ButtonId dismissButton : {core::ButtonId::Left,
+                                             core::ButtonId::Right}) {
+    FakeTimeSource source;
+    core::SoftwareClock clock(source);
+    core::ApplicationCore app(clock, 1000, 1000000);
+    app.setInitialRouteOrder(
+        orderWith(segment(0, domain::SegmentType::TIME, 1)), true);
+    acceptNoon(app);
+    press(app, core::ButtonId::Point, core::ButtonEventType::Release);
+
+    TEST_ASSERT_TRUE(app.displayModel().finishResult.visible);
+    press(app, dismissButton);
+
+    const core::DisplayModel dismissed = app.displayModel();
+    TEST_ASSERT_FALSE(dismissed.finishResult.visible);
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(domain::CompetitionState::IDLE),
+        static_cast<uint8_t>(dismissed.competition.state));
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(domain::CompetitionState::FINISHED),
+        static_cast<uint8_t>(app.competition().state()));
+    TEST_ASSERT_EQUAL_size_t(1, app.competition().stageResults().size());
+  }
+}
+
 void testResultMenusShowStageTotalAndOrderedEvents() {
   FakeTimeSource source;
   core::SoftwareClock clock(source);
@@ -803,16 +844,61 @@ void testResultMenusShowStageTotalAndOrderedEvents() {
   press(app, core::ButtonId::Left);
   press(app, core::ButtonId::Down);
   press(app, core::ButtonId::Right);
-  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(core::ResultViewType::TotalPoints),
-                          static_cast<uint8_t>(app.displayModel().resultView.type));
-  press(app, core::ButtonId::Left);
-  press(app, core::ButtonId::Down);
-  press(app, core::ButtonId::Right);
   const core::ResultViewDisplayModel events = app.displayModel().resultView;
   TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(core::ResultViewType::Events),
                           static_cast<uint8_t>(events.type));
   TEST_ASSERT_TRUE(events.hasEvent);
   TEST_ASSERT_TRUE(events.itemCount >= 3);
+}
+
+void testFinishStageIsLastBrowsableStageResult() {
+  FakeTimeSource source;
+  core::SoftwareClock clock(source);
+  core::ApplicationCore app(clock, 1000, 1000000);
+  domain::CompetitionSettings settings;
+  settings.jatResultSeconds = 0;
+  app.setCompetitionSettings(settings);
+
+  domain::RouteOrder order;
+  order.competitionType = domain::CompetitionType::NON_EMIT;
+  order.startHour = 12;
+  for (uint16_t index = 0; index < 5; ++index) {
+    domain::SegmentDefinition current =
+        segment(index, domain::SegmentType::TIME, 1,
+                index == 4 ? domain::PointType::FINISH_M
+                           : domain::PointType::JAT);
+    if (index < 4) {
+      current.hasJatType = true;
+      current.jatType = domain::JatType::MANNED_JAT;
+      current.hasJatOffsetMinutes = true;
+    }
+    order.segments.push_back(current);
+  }
+  app.setInitialRouteOrder(order, true);
+  acceptNoon(app);
+  for (uint8_t stage = 0; stage < 4; ++stage) {
+    press(app, core::ButtonId::Point, core::ButtonEventType::Release);
+    press(app, core::ButtonId::Right);
+    source.nowMs += 60000;
+    app.tick(source.nowMs * 1000UL);
+  }
+  press(app, core::ButtonId::Point, core::ButtonEventType::Release);
+
+  TEST_ASSERT_EQUAL_size_t(5, app.competition().stageResults().size());
+  TEST_ASSERT_EQUAL_UINT16(4,
+                           app.competition().stageResults().back().stageIndex);
+
+  press(app, core::ButtonId::Left);
+  press(app, core::ButtonId::Down);
+  for (uint8_t index = 0; index < 3; ++index)
+    press(app, core::ButtonId::Down);
+  press(app, core::ButtonId::Right);
+  press(app, core::ButtonId::Right);
+  for (uint8_t index = 0; index < 4; ++index)
+    press(app, core::ButtonId::Down);
+  const core::ResultViewDisplayModel result = app.displayModel().resultView;
+  TEST_ASSERT_EQUAL_UINT16(5, result.itemCount);
+  TEST_ASSERT_EQUAL_UINT16(4, result.stageResult.stageIndex);
 }
 
 void testCoreEventAuditIncludesPointUndoReverseTripAndStageResult() {
@@ -1225,9 +1311,10 @@ void testWaitStartOrderMenuPromptsEditOrReplace() {
       static_cast<uint8_t>(core::Screen::OrderAccessPrompt),
       static_cast<uint8_t>(editApp.screen()));
   TEST_ASSERT_EQUAL_UINT8(
-      static_cast<uint8_t>(core::OrderAccessAction::Edit),
+      static_cast<uint8_t>(core::OrderAccessAction::Replace),
       static_cast<uint8_t>(
           editApp.displayModel().orderAccess.selectedAction));
+  press(editApp, core::ButtonId::Down);
   press(editApp, core::ButtonId::Right);
   TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(core::Screen::OrderEdit),
                           static_cast<uint8_t>(editApp.screen()));
@@ -1244,9 +1331,10 @@ void testWaitStartOrderMenuPromptsEditOrReplace() {
   press(replaceApp, core::ButtonId::Right);
   press(replaceApp, core::ButtonId::Down);
   TEST_ASSERT_EQUAL_UINT8(
-      static_cast<uint8_t>(core::OrderAccessAction::Replace),
+      static_cast<uint8_t>(core::OrderAccessAction::Edit),
       static_cast<uint8_t>(
           replaceApp.displayModel().orderAccess.selectedAction));
+  press(replaceApp, core::ButtonId::Up);
   press(replaceApp, core::ButtonId::Right);
   TEST_ASSERT_EQUAL_UINT8(
       static_cast<uint8_t>(route::EditorPhase::COMPETITION_TYPE),
@@ -1306,7 +1394,9 @@ int main(int, char**) {
   RUN_TEST(testJatResultRightSkipsAndTimeoutTransitions);
   RUN_TEST(testAcceptedStartCorrectionPreservesPhysicalZeroAndCanCancel);
   RUN_TEST(testFinishRequestsPersistentCompletion);
+  RUN_TEST(testFinishResultDismissesWithEitherHorizontalButton);
   RUN_TEST(testResultMenusShowStageTotalAndOrderedEvents);
+  RUN_TEST(testFinishStageIsLastBrowsableStageResult);
   RUN_TEST(testCoreEventAuditIncludesPointUndoReverseTripAndStageResult);
   RUN_TEST(testPulseGeneratorCycleIntegration);
   RUN_TEST(testLilyGoCompetitionGPIOContractAndCoreEvents);

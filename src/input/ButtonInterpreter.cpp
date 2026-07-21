@@ -1,13 +1,23 @@
 #include "ButtonInterpreter.h"
 
 namespace input {
+namespace {
+
+bool hasElapsed(uint32_t nowMs, uint32_t sinceMs, uint32_t intervalMs) {
+  return static_cast<int32_t>(nowMs - sinceMs) >=
+         static_cast<int32_t>(intervalMs);
+}
+
+}  // namespace
 
 ButtonInterpreter::ButtonInterpreter(uint32_t debounceMs,
                                      uint32_t longPressDelayMs,
-                                     uint32_t repeatIntervalMs)
+                                     uint32_t repeatIntervalMs,
+                                     uint32_t minimumPressIntervalMs)
     : debounceMs_(debounceMs),
       longPressDelayMs_(longPressDelayMs),
-      repeatIntervalMs_(repeatIntervalMs) {}
+      repeatIntervalMs_(repeatIntervalMs),
+      minimumPressIntervalMs_(minimumPressIntervalMs) {}
 
 void ButtonInterpreter::reset(bool pressed, uint32_t nowMs) {
   rawPressed_ = pressed;
@@ -16,6 +26,9 @@ void ButtonInterpreter::reset(bool pressed, uint32_t nowMs) {
   rawChangedAtMs_ = nowMs;
   pressedAtMs_ = nowMs;
   nextRepeatAtMs_ = nowMs + longPressDelayMs_;
+  lastAcceptedPressAtMs_ = nowMs;
+  hasAcceptedPress_ = pressed;
+  suppressCurrentPress_ = false;
 }
 
 ButtonTransitions ButtonInterpreter::update(bool rawPressed, uint32_t nowMs) {
@@ -26,21 +39,31 @@ ButtonTransitions ButtonInterpreter::update(bool rawPressed, uint32_t nowMs) {
   }
 
   if (rawPressed_ != stablePressed_ &&
-      nowMs - rawChangedAtMs_ >= debounceMs_) {
+      hasElapsed(nowMs, rawChangedAtMs_, debounceMs_)) {
     stablePressed_ = rawPressed_;
     if (stablePressed_) {
-      transitions.pressed = true;
+      suppressCurrentPress_ =
+          hasAcceptedPress_ &&
+          !hasElapsed(nowMs, lastAcceptedPressAtMs_,
+                      minimumPressIntervalMs_);
+      transitions.pressed = !suppressCurrentPress_;
+      if (!suppressCurrentPress_) {
+        lastAcceptedPressAtMs_ = nowMs;
+        hasAcceptedPress_ = true;
+      }
       longStarted_ = false;
       pressedAtMs_ = nowMs;
       nextRepeatAtMs_ = nowMs + longPressDelayMs_;
     } else {
       transitions.released = true;
-      transitions.shortPress = !longStarted_;
+      transitions.shortPress = !longStarted_ && !suppressCurrentPress_;
+      suppressCurrentPress_ = false;
     }
   }
 
-  if (stablePressed_ && !longStarted_ && longPressDelayMs_ > 0 &&
-      nowMs - pressedAtMs_ >= longPressDelayMs_) {
+  if (stablePressed_ && !suppressCurrentPress_ && !longStarted_ &&
+      longPressDelayMs_ > 0 &&
+      hasElapsed(nowMs, pressedAtMs_, longPressDelayMs_)) {
     longStarted_ = true;
     transitions.longStart = true;
     nextRepeatAtMs_ = nowMs + repeatIntervalMs_;
