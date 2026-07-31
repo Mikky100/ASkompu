@@ -43,6 +43,8 @@ enum class DomainEventType : uint8_t {
   ROAD_BREAK,
   REVERSE_CHANGED,
   TRIP_RESET,
+  MANUAL_SUBTRACTION_CHANGED,
+  TIME_ADJUSTMENT,
 };
 
 enum class OverrideType : uint8_t { ADDITIONAL_ORDER, ROAD_BREAK };
@@ -81,6 +83,8 @@ struct EventPayload {
   uint32_t proposedCalibration = 0;
   TripChannel tripChannel = TripChannel::TRIP_1;
   bool reverseActive = false;
+  bool manualSubtractActive = false;
+  int32_t timeAdjustmentSeconds = 0;
   bool hasOverride = false;
   SegmentOverride segmentOverride;
 };
@@ -102,6 +106,7 @@ struct EventRecord {
   int64_t trip2DistanceMillimeters = 0;
   int32_t speedKmhMilli = 0;
   bool reverseActive = false;
+  bool manualSubtractActive = false;
   EventPayload payload;
   bool cancelled = false;
 };

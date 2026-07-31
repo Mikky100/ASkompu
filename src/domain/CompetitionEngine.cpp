@@ -156,13 +156,6 @@ void CompetitionEngine::updateCalculation(uint64_t monotonicMs) {
   if (state_ == CompetitionState::WAIT_START) {
     if (realTimeMs_ >= 0) {
       state_ = CompetitionState::RUNNING;
-    } else if (stageIndex_ > 0) {
-      // A stage after JAT has no running competition clock before its accepted
-      // start. The completed stage result remains in finalDeltaMs_.
-      realTimeMs_ = 0;
-      idealTimeMs_ = 0;
-      deltaMs_ = 0;
-      return;
     }
   }
   idealTimeMs_ = saturatingAddInt64(idealBeforeSegmentMs_,
@@ -191,6 +184,20 @@ void CompetitionEngine::addDistanceMillimeters(int64_t deltaMillimeters) {
   }
   segmentDistanceMm_ = saturatingAddInt64(segmentDistanceMm_, deltaMillimeters);
   updateCalculation(lastMonotonicMs_);
+}
+
+bool CompetitionEngine::applyTimeAdjustmentMilliseconds(int64_t adjustmentMs) {
+  if (state_ != CompetitionState::RUNNING || adjustmentMs == 0) return false;
+  idealBeforeSegmentMs_ =
+      saturatingAddInt64(idealBeforeSegmentMs_, adjustmentMs);
+  if (hasActiveOverride_ &&
+      currentSegmentIndex_ >= activeOverride_.startSegmentIndex &&
+      currentSegmentIndex_ < activeOverride_.endPointIndex) {
+    overrideIdealBeforeMs_ =
+        saturatingAddInt64(overrideIdealBeforeMs_, adjustmentMs);
+  }
+  updateCalculation(lastMonotonicMs_);
+  return true;
 }
 
 PointResult CompetitionEngine::pointReleased(uint64_t monotonicMs,

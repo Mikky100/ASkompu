@@ -29,6 +29,7 @@ struct DisplayLayout {
   WidgetRect nextSegment;
   WidgetRect debugSpeed;
   FontScale topFont;
+  FontScale clockFont;
   FontScale segmentFont;
   FontScale segmentValueFont;
   FontScale deltaFont;
