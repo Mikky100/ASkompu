@@ -12,6 +12,7 @@
 #include "domain/SpeedCalculator.h"
 #include "domain/TripCounter.h"
 #include "input/ButtonInterpreter.h"
+#include "input/PulseFilter.h"
 #include "route/RouteOrderCodec.h"
 #include "route/RouteOrderEditor.h"
 #include "route/RouteOrderStore.h"
@@ -1006,6 +1007,9 @@ void testCalibrationSaveFailureStaysInEditor() {
 
 void testTripResetsAreIndependentAndKeepTotal() {
   Fixture fixture;
+  domain::DisplaySettings resetTrip2;
+  resetTrip2.externalResetTarget = domain::TripResetTarget::TRIP_2;
+  fixture.application.setInitialDisplaySettings(resetTrip2);
   pulse(fixture.application, 10, 900000, 1000000, 1000000);
   fixture.application.handleButton(
       button(core::ButtonId::Trip1Reset, core::ButtonEventType::Press));
@@ -1042,6 +1046,9 @@ void testTripMenuActionsResetNamedTripOnly() {
   pulse(fixture.application, 5, 400000, 500000, 500000);
   openMainAt(fixture, 5);
   press(fixture.application, core::ButtonId::Right);
+  press(fixture.application, core::ButtonId::Down);
+  press(fixture.application, core::ButtonId::Down);
+  press(fixture.application, core::ButtonId::Down);
   press(fixture.application, core::ButtonId::Right);
   TEST_ASSERT_EQUAL_UINT64(0, fixture.application.trip1DistanceMillimeters());
   TEST_ASSERT_EQUAL_UINT64(5000,
@@ -1068,6 +1075,20 @@ void testSparseAndDensePulseSpeeds() {
   assertSpeed(100, 10000, 36.0F);
   assertSpeed(100, 6000, 60.0F);
   assertSpeed(100, 3000, 120.0F);
+}
+
+void testPulseFilterUsesCalibrationAndMaximumSpeed() {
+  TEST_ASSERT_EQUAL_UINT32(18000,
+                           input::minimumPulseIntervalUs(1000, 200));
+  TEST_ASSERT_EQUAL_UINT32(4500,
+                           input::minimumPulseIntervalUs(250, 200));
+  TEST_ASSERT_EQUAL_UINT32(0, input::minimumPulseIntervalUs(1000, 0));
+
+  TEST_ASSERT_TRUE(input::acceptsPulseInterval(1000, 0, 18000, false));
+  TEST_ASSERT_FALSE(input::acceptsPulseInterval(18999, 1000, 18000, true));
+  TEST_ASSERT_TRUE(input::acceptsPulseInterval(19000, 1000, 18000, true));
+  TEST_ASSERT_TRUE(input::acceptsPulseInterval(
+      100, UINT32_MAX - 100U, 200, true));
 }
 
 void testSpeedReturnsToZeroAndTimestampRollover() {
@@ -1363,6 +1384,96 @@ void testDisplayBrightnessAndLabelsAreEditedThenAccepted() {
   TEST_ASSERT_FALSE(fixture.application.displayModel().showLabels);
 }
 
+void testMenuFontSizeAndTripSelectionsArePersistentSettings() {
+  Fixture fixture;
+  acceptStartupTime(fixture, 0, 0);
+  openMainAt(fixture, 4);
+  press(fixture.application, core::ButtonId::Right);  // display
+  press(fixture.application, core::ButtonId::Down);
+  press(fixture.application, core::ButtonId::Down);
+  press(fixture.application, core::ButtonId::Down);
+  press(fixture.application, core::ButtonId::Right);  // font size
+  TEST_ASSERT_EQUAL_STRING("KOKO: KESKI",
+                           fixture.application.displayModel().menu.rows[0].label);
+  press(fixture.application, core::ButtonId::Up);
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(domain::MenuFontSize::LARGE),
+      static_cast<uint8_t>(fixture.application.displayModel().menuFontSize));
+  press(fixture.application, core::ButtonId::Right);
+  domain::DisplaySettings requested;
+  TEST_ASSERT_TRUE(
+      fixture.application.takeDisplaySettingsSaveRequest(requested));
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(domain::MenuFontSize::LARGE),
+                          static_cast<uint8_t>(requested.menuFontSize));
+  fixture.application.completeDisplaySettingsSave(true);
+
+  press(fixture.application, core::ButtonId::Left);
+  press(fixture.application, core::ButtonId::Left);
+  openMainAt(fixture, 5);
+  press(fixture.application, core::ButtonId::Right);  // trips
+  TEST_ASSERT_EQUAL_STRING("NAYTA: TRIP1",
+                           fixture.application.displayModel().menu.rows[0].label);
+  press(fixture.application, core::ButtonId::Right);  // trip display
+  press(fixture.application, core::ButtonId::Up);
+  press(fixture.application, core::ButtonId::Up);
+  TEST_ASSERT_EQUAL_STRING("NAYTA: TRIP1+2",
+                           fixture.application.displayModel().menu.rows[0].label);
+  press(fixture.application, core::ButtonId::Right);
+  TEST_ASSERT_TRUE(
+      fixture.application.takeDisplaySettingsSaveRequest(requested));
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(domain::TripDisplayMode::BOTH),
+                          static_cast<uint8_t>(requested.tripDisplayMode));
+  fixture.application.completeDisplaySettingsSave(true);
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(domain::TripDisplayMode::BOTH),
+      static_cast<uint8_t>(fixture.application.displayModel().tripDisplayMode));
+
+  press(fixture.application, core::ButtonId::Down);
+  press(fixture.application, core::ButtonId::Right);  // external reset
+  press(fixture.application, core::ButtonId::Up);
+  press(fixture.application, core::ButtonId::Right);
+  TEST_ASSERT_TRUE(
+      fixture.application.takeDisplaySettingsSaveRequest(requested));
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(domain::TripResetTarget::TRIP_2),
+      static_cast<uint8_t>(requested.externalResetTarget));
+  fixture.application.completeDisplaySettingsSave(true);
+
+  press(fixture.application, core::ButtonId::Down);
+  press(fixture.application, core::ButtonId::Right);  // internal reset
+  press(fixture.application, core::ButtonId::Up);
+  press(fixture.application, core::ButtonId::Right);
+  TEST_ASSERT_TRUE(
+      fixture.application.takeDisplaySettingsSaveRequest(requested));
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(domain::TripResetTarget::TRIP_2),
+      static_cast<uint8_t>(requested.internalResetTarget));
+  fixture.application.completeDisplaySettingsSave(true);
+}
+
+void testConfiguredInternalAndBothExternalInputsResetSelectedTrips() {
+  Fixture fixture;
+  domain::DisplaySettings settings;
+  settings.externalResetTarget = domain::TripResetTarget::TRIP_2;
+  settings.internalResetTarget = domain::TripResetTarget::TRIP_1;
+  fixture.application.setInitialDisplaySettings(settings);
+  pulse(fixture.application, 5, 400000, 500000, 500000);
+
+  press(fixture.application, core::ButtonId::FootReset);
+  TEST_ASSERT_EQUAL_INT64(5000, fixture.application.trip1DistanceMillimeters());
+  TEST_ASSERT_EQUAL_INT64(0, fixture.application.trip2DistanceMillimeters());
+  fixture.application.handleButton(
+      button(core::ButtonId::FootReset, core::ButtonEventType::Release));
+  pulse(fixture.application, 2, 500000, 700000, 700000);
+  press(fixture.application, core::ButtonId::Trip2Reset);
+  TEST_ASSERT_EQUAL_INT64(7000, fixture.application.trip1DistanceMillimeters());
+  TEST_ASSERT_EQUAL_INT64(0, fixture.application.trip2DistanceMillimeters());
+  fixture.application.handleButton(
+      button(core::ButtonId::Trip2Reset, core::ButtonEventType::Release));
+  press(fixture.application, core::ButtonId::Trip1Reset);
+  TEST_ASSERT_EQUAL_INT64(0, fixture.application.trip1DistanceMillimeters());
+}
+
 }  // namespace
 
 int main(int, char**) {
@@ -1410,6 +1521,7 @@ int main(int, char**) {
   RUN_TEST(testTripMenuActionsResetNamedTripOnly);
   RUN_TEST(testPulsesAccumulateDuringStartupTimeEntry);
   RUN_TEST(testSparseAndDensePulseSpeeds);
+  RUN_TEST(testPulseFilterUsesCalibrationAndMaximumSpeed);
   RUN_TEST(testSpeedReturnsToZeroAndTimestampRollover);
   RUN_TEST(testGeneratorCycleDistanceSpeedAndPauses);
   RUN_TEST(testCalibrationChangeAffectsOnlyFuturePulses);
@@ -1424,5 +1536,7 @@ int main(int, char**) {
   RUN_TEST(testDebugSpeedCanBeEnabledDisabledAndFailureKeepsOldValue);
   RUN_TEST(testUnchangedDebugSettingDoesNotRequestPersistentWrite);
   RUN_TEST(testDisplayBrightnessAndLabelsAreEditedThenAccepted);
+  RUN_TEST(testMenuFontSizeAndTripSelectionsArePersistentSettings);
+  RUN_TEST(testConfiguredInternalAndBothExternalInputsResetSelectedTrips);
   return UNITY_END();
 }

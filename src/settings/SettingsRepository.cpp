@@ -19,6 +19,10 @@ constexpr char AT_DISPLAY_DISTANCE_KEY[] = "atDistanceM";
 constexpr char DEBUG_DISPLAY_ELEMENTS_KEY[] = "debugDisplay";
 constexpr char BACKLIGHT_PERCENT_KEY[] = "backlight";
 constexpr char SHOW_LABELS_KEY[] = "showLabels";
+constexpr char MENU_FONT_SIZE_KEY[] = "menuFont";
+constexpr char TRIP_DISPLAY_MODE_KEY[] = "tripDisplay";
+constexpr char EXTERNAL_RESET_TARGET_KEY[] = "extTripReset";
+constexpr char INTERNAL_RESET_TARGET_KEY[] = "intTripReset";
 
 }  // namespace
 
@@ -218,6 +222,21 @@ DisplaySettingsLoadResult SettingsRepository::loadDisplaySettings() const {
   loaded.backlightPercent = preferences.getUChar(
       BACKLIGHT_PERCENT_KEY, domain::DEFAULT_BACKLIGHT_PERCENT);
   loaded.showLabels = preferences.getBool(SHOW_LABELS_KEY, true);
+  loaded.menuFontSize = static_cast<domain::MenuFontSize>(preferences.getUChar(
+      MENU_FONT_SIZE_KEY,
+      static_cast<uint8_t>(domain::MenuFontSize::MEDIUM)));
+  loaded.tripDisplayMode = static_cast<domain::TripDisplayMode>(
+      preferences.getUChar(
+          TRIP_DISPLAY_MODE_KEY,
+          static_cast<uint8_t>(domain::TripDisplayMode::TRIP_1)));
+  loaded.externalResetTarget = static_cast<domain::TripResetTarget>(
+      preferences.getUChar(
+          EXTERNAL_RESET_TARGET_KEY,
+          static_cast<uint8_t>(domain::TripResetTarget::TRIP_1)));
+  loaded.internalResetTarget = static_cast<domain::TripResetTarget>(
+      preferences.getUChar(
+          INTERNAL_RESET_TARGET_KEY,
+          static_cast<uint8_t>(domain::TripResetTarget::TRIP_1)));
   preferences.end();
   const domain::DisplaySettings validated =
       domain::validatedDisplaySettings(loaded);
@@ -244,6 +263,28 @@ bool SettingsRepository::saveDisplaySettings(
                 settings.showLabels)
     ok = preferences.putBool(SHOW_LABELS_KEY, settings.showLabels) ==
          sizeof(bool);
+  if (ok && preferences.getUChar(MENU_FONT_SIZE_KEY, 0xFF) !=
+                static_cast<uint8_t>(settings.menuFontSize))
+    ok = preferences.putUChar(MENU_FONT_SIZE_KEY,
+                              static_cast<uint8_t>(settings.menuFontSize)) ==
+         sizeof(uint8_t);
+  if (ok && preferences.getUChar(TRIP_DISPLAY_MODE_KEY, 0xFF) !=
+                static_cast<uint8_t>(settings.tripDisplayMode))
+    ok = preferences.putUChar(
+             TRIP_DISPLAY_MODE_KEY,
+             static_cast<uint8_t>(settings.tripDisplayMode)) == sizeof(uint8_t);
+  if (ok && preferences.getUChar(EXTERNAL_RESET_TARGET_KEY, 0xFF) !=
+                static_cast<uint8_t>(settings.externalResetTarget))
+    ok = preferences.putUChar(
+             EXTERNAL_RESET_TARGET_KEY,
+             static_cast<uint8_t>(settings.externalResetTarget)) ==
+         sizeof(uint8_t);
+  if (ok && preferences.getUChar(INTERNAL_RESET_TARGET_KEY, 0xFF) !=
+                static_cast<uint8_t>(settings.internalResetTarget))
+    ok = preferences.putUChar(
+             INTERNAL_RESET_TARGET_KEY,
+             static_cast<uint8_t>(settings.internalResetTarget)) ==
+         sizeof(uint8_t);
   preferences.end();
   return ok;
 }

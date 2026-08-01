@@ -21,7 +21,11 @@ enum class MenuPage : uint8_t {
   TextColor,
   Brightness,
   DisplayLabels,
+  MenuFontSize,
   Trips,
+  TripDisplay,
+  ExternalTripReset,
+  InternalTripReset,
   System,
   Debug,
 };
@@ -68,6 +72,7 @@ class ApplicationCore {
   int64_t trip2DistanceMillimeters() const { return trip2DistanceMm_; }
   uint64_t totalPulseCount() const { return totalPulseCount_; }
   uint32_t millimetersPerPulse() const { return millimetersPerPulse_; }
+  bool manualSubtractActive() const { return manualSubtractActive_; }
   Screen screen() const { return screen_; }
   MenuPage menuPage() const { return menuPage_; }
   uint8_t menuSelectedIndex() const { return menuSelectedIndex_; }
@@ -80,6 +85,7 @@ class ApplicationCore {
  private:
   void handleTimeEntry(const ButtonEvent& event);
   void handleBasicView(const ButtonEvent& event);
+  void handleTimeAdjustment(const ButtonEvent& event);
   void handleMenu(const ButtonEvent& event);
   void handleCalibration(const ButtonEvent& event);
   void handleMittisProposal(const ButtonEvent& event);
@@ -102,8 +108,12 @@ class ApplicationCore {
   void beginTimeEdit(bool startup);
   void resetTrip1();
   void resetTrip2();
+  void resetSelectedTrip(domain::TripResetTarget target);
+  bool resetHeldFor(domain::TripResetTarget target) const;
   void updateMittisTripStart();
   void addDistance(int64_t deltaMillimeters, uint32_t pulseCount);
+  void setManualSubtractActive(bool active);
+  bool canToggleManualSubtract() const;
   domain::EventRecord makeEvent(domain::DomainEventType type) const;
   uint64_t appendEvent(domain::EventRecord record);
   void handleAtRelease();
@@ -137,7 +147,9 @@ class ApplicationCore {
   uint64_t totalPulseCount_ = 0;
   uint64_t trip1PulseCount_ = 0;
   uint64_t trip2PulseCount_ = 0;
-  bool trip1ResetHeld_ = false;
+  bool internalResetHeld_ = false;
+  bool footResetHeld_ = false;
+  bool secondExternalResetHeld_ = false;
   uint16_t mittisTripSegmentIndex_ = 0xFFFFU;
   bool trip1DisplayFreezeActive_ = false;
   int64_t trip1DisplayFrozenMm_ = 0;
@@ -171,6 +183,9 @@ class ApplicationCore {
   uint8_t lastPointEventType_ = 0xFF;
   uint8_t lastAtEventType_ = 0xFF;
   bool reverseActive_ = false;
+  bool manualSubtractActive_ = false;
+  bool timeAdjustmentEditing_ = false;
+  int32_t editedTimeAdjustmentSeconds_ = 0;
   bool atOverlayVisible_ = false;
   uint64_t lastPointEventId_ = 0;
   uint64_t atEventId_ = 0;

@@ -16,6 +16,7 @@ class PulseInput {
   PulseInput(uint8_t pin, uint8_t inputMode, int interruptMode);
 
   void begin();
+  void setMinimumPulseIntervalUs(uint32_t minimumIntervalUs);
   PulseSnapshot consumeSnapshot();
 
  private:
@@ -29,6 +30,8 @@ class PulseInput {
   volatile uint32_t totalPulses_ = 0;
   volatile uint32_t previousPulseAtUs_ = 0;
   volatile uint32_t lastPulseAtUs_ = 0;
+  volatile uint32_t minimumPulseIntervalUs_ = 0;
+  volatile bool hasAcceptedPulse_ = false;
   portMUX_TYPE mux_ = portMUX_INITIALIZER_UNLOCKED;
 };
 

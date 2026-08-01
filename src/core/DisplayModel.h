@@ -133,6 +133,9 @@ struct CompetitionDisplayModel {
   domain::SegmentDefinition nextSegment;
   bool hasNextSegment;
   bool undoPromptVisible;
+  bool manualSubtractActive;
+  bool timeAdjustmentEditing;
+  int32_t editedTimeAdjustmentSeconds;
 };
 
 constexpr uint8_t MENU_VISIBLE_ROWS = 3;
@@ -179,6 +182,8 @@ struct DisplayModel {
   domain::TextColor textColor;
   uint8_t backlightPercent;
   bool showLabels;
+  domain::MenuFontSize menuFontSize;
+  domain::TripDisplayMode tripDisplayMode;
   ClockTime clock;
   float speedKmh;
   bool showSpeed;

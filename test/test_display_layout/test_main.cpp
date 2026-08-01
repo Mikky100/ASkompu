@@ -71,7 +71,7 @@ void testRepresentativeTextsFitTheirRegions() {
                                          ui::layoutFor(480, 320)}) {
     TEST_ASSERT_TRUE(ui::estimatedTextWidth("-12.34", layout.topFont) <=
                      layout.trip1.width);
-    TEST_ASSERT_TRUE(ui::estimatedTextWidth("23:59:59", layout.topFont) <=
+    TEST_ASSERT_TRUE(ui::estimatedTextWidth("23:59:59", layout.clockFont) <=
                      layout.clock.width);
     TEST_ASSERT_TRUE(ui::estimatedTextWidth("12-13", layout.segmentFont) <=
                      layout.currentSegment.width);
@@ -106,11 +106,21 @@ void testProfilesUseDifferentMeasurementsAndSameSemanticOrder() {
   const ui::DisplayLayout large = ui::layoutFor(480, 320);
   TEST_ASSERT_NOT_EQUAL(small.delta.width, large.delta.width);
   TEST_ASSERT_TRUE(small.trip1.right() <= small.clock.x);
-  TEST_ASSERT_TRUE(large.trip1.right() <= large.clock.x);
+  TEST_ASSERT_TRUE(large.trip1.bottom() <= large.currentSegment.y);
+  TEST_ASSERT_TRUE(large.clock.y >= large.currentSegment.bottom());
   TEST_ASSERT_TRUE(small.currentSegment.x < small.delta.x);
   TEST_ASSERT_TRUE(small.delta.x < small.nextSegment.x);
   TEST_ASSERT_TRUE(large.currentSegment.x < large.delta.x);
   TEST_ASSERT_TRUE(large.delta.x < large.nextSegment.x);
+}
+
+void testIli9488EmphasizesTripAndPlacesClockAtBottomRight() {
+  const ui::DisplayLayout layout = ui::layoutFor(480, 320);
+  TEST_ASSERT_TRUE(layout.trip1.width > layout.width * 9 / 10);
+  TEST_ASSERT_TRUE(layout.topFont.value >= 6);
+  TEST_ASSERT_TRUE(layout.clock.x >= layout.width / 2);
+  TEST_ASSERT_EQUAL_INT16(layout.height, layout.clock.bottom());
+  TEST_ASSERT_FALSE(ui::overlaps(layout.clock, layout.debugSpeed));
 }
 
 void testCompetitionLayoutEmphasizesDeltaOverSideValues() {
@@ -148,6 +158,7 @@ int main(int, char**) {
   RUN_TEST(testMissingNextSegmentCannotMoveDeltaGeometry);
   RUN_TEST(testDebugSpeedDoesNotOverlapCompetitionValues);
   RUN_TEST(testProfilesUseDifferentMeasurementsAndSameSemanticOrder);
+  RUN_TEST(testIli9488EmphasizesTripAndPlacesClockAtBottomRight);
   RUN_TEST(testCompetitionLayoutEmphasizesDeltaOverSideValues);
   RUN_TEST(testBottomTenPercentIsReservedForFooter);
   return UNITY_END();

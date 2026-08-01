@@ -11,6 +11,8 @@ namespace core {
 namespace {
 
 constexpr uint64_t MITTIS_TRIP_DISPLAY_FREEZE_MS = 10000ULL;
+constexpr int32_t TIME_ADJUSTMENT_STEP_SECONDS = 10;
+constexpr int32_t MAX_TIME_ADJUSTMENT_SECONDS = 3590;
 
 domain::EventClockTime eventClock(const ClockTime& value) {
   return {value.hour, value.minute, value.second};
@@ -48,7 +50,7 @@ constexpr MenuItem MAIN_ITEMS[] = {
     {"AJOMAARAYS", true},
     {"KELLO", true},
     {"KERROIN", true},
-    {"PISTEET JA TAPAHTUMAT", true},
+    {"PISTEET JA LOKI", true},
     {"NAYTTOASETUKSET", true},
     {"TRIPIT", true},
     {"JARJESTELMA", true},
@@ -57,15 +59,22 @@ constexpr MenuItem RESULT_ITEMS[] = {{"JAKSOJEN PISTEET", true},
                                      {"TAPAHTUMAT", true}};
 constexpr MenuItem DISPLAY_ITEMS[] = {{"KIRKKAUS", true},
                                       {"TEKSTIN VARI", true},
-                                      {"NAYTTOSELITTEET", true}};
+                                      {"NAYTTOSELITTEET", true},
+                                      {"KIRJASINKOKO", true}};
 constexpr MenuItem TEXT_COLOR_ITEMS[] = {{"VALKOINEN", true},
                                          {"PUNAINEN", true},
                                          {"VIHREA", true}};
 constexpr MenuItem BRIGHTNESS_ITEMS[] = {{"KIRKKAUS", true}};
 constexpr MenuItem DISPLAY_LABEL_ITEMS[] = {{"SELITTEET", true}};
-constexpr MenuItem TRIP_ITEMS[] = {{"NOLLAA TRIP 1", true},
-                                   {"NOLLAA TRIP 2", true},
-                                   {"ULKOINEN TRIP", false}};
+constexpr MenuItem MENU_FONT_SIZE_ITEMS[] = {{"KIRJASINKOKO", true}};
+constexpr MenuItem TRIP_ITEMS[] = {{"NAYTA", true},
+                                   {"ULK.NOLLAUS", true},
+                                   {"SIS.NOLLAUS", true},
+                                   {"NOLLAA TRIP 1", true},
+                                   {"NOLLAA TRIP 2", true}};
+constexpr MenuItem TRIP_DISPLAY_ITEMS[] = {{"NAYTA", true}};
+constexpr MenuItem EXTERNAL_TRIP_RESET_ITEMS[] = {{"ULK.NOLLAUS", true}};
+constexpr MenuItem INTERNAL_TRIP_RESET_ITEMS[] = {{"SIS.NOLLAUS", true}};
 constexpr MenuItem SYSTEM_ITEMS[] = {{"DIAGNOSTIIKKA", true},
                                      {"DEBUG", true},
                                      {"PAINIKEASETUKSET", false},
@@ -103,10 +112,26 @@ const MenuItem* itemsFor(MenuPage page, uint8_t& count, const char*& title) {
       title = "NAYTTOSELITTEET";
       count = countOf(DISPLAY_LABEL_ITEMS);
       return DISPLAY_LABEL_ITEMS;
+    case MenuPage::MenuFontSize:
+      title = "KIRJASINKOKO";
+      count = countOf(MENU_FONT_SIZE_ITEMS);
+      return MENU_FONT_SIZE_ITEMS;
     case MenuPage::Trips:
       title = "TRIPIT";
       count = countOf(TRIP_ITEMS);
       return TRIP_ITEMS;
+    case MenuPage::TripDisplay:
+      title = "TRIPIN NAYTTO";
+      count = countOf(TRIP_DISPLAY_ITEMS);
+      return TRIP_DISPLAY_ITEMS;
+    case MenuPage::ExternalTripReset:
+      title = "ULKOINEN NOLLAUS";
+      count = countOf(EXTERNAL_TRIP_RESET_ITEMS);
+      return EXTERNAL_TRIP_RESET_ITEMS;
+    case MenuPage::InternalTripReset:
+      title = "SISAINEN NOLLAUS";
+      count = countOf(INTERNAL_TRIP_RESET_ITEMS);
+      return INTERNAL_TRIP_RESET_ITEMS;
     case MenuPage::System:
       title = "JARJESTELMA";
       count = countOf(SYSTEM_ITEMS);
@@ -182,19 +207,30 @@ void ApplicationCore::handleButton(const ButtonEvent& event) {
   if (event.buttonId == ButtonId::At)
     lastAtEventType_ = static_cast<uint8_t>(event.eventType);
 
-  if (event.buttonId == ButtonId::Trip1Reset ||
-      event.buttonId == ButtonId::FootReset) {
+  if (event.buttonId == ButtonId::Trip1Reset) {
     if (event.eventType == ButtonEventType::Press) {
-      trip1ResetHeld_ = true;
-      resetTrip1();
+      internalResetHeld_ = true;
+      resetSelectedTrip(displaySettings_.internalResetTarget);
     } else if (event.eventType == ButtonEventType::Release) {
-      trip1ResetHeld_ = false;
+      internalResetHeld_ = false;
     }
     return;
   }
-  if (event.buttonId == ButtonId::Trip2Reset &&
-      event.eventType == ButtonEventType::Press) {
-    resetTrip2();
+  if (event.buttonId == ButtonId::FootReset ||
+      event.buttonId == ButtonId::Trip2Reset) {
+    bool& held = event.buttonId == ButtonId::FootReset
+                     ? footResetHeld_
+                     : secondExternalResetHeld_;
+    if (event.eventType == ButtonEventType::Press) {
+      held = true;
+      resetSelectedTrip(displaySettings_.externalResetTarget);
+    } else if (event.eventType == ButtonEventType::Release) {
+      held = false;
+    }
+    return;
+  }
+  if (timeAdjustmentEditing_) {
+    handleTimeAdjustment(event);
     return;
   }
 
@@ -215,6 +251,8 @@ void ApplicationCore::handleButton(const ButtonEvent& event) {
         competition_.pointReleased(clock_.elapsedSinceSetMilliseconds(),
                                    millimetersPerPulse_, eventClock(clock_.now()),
                                    competitionSettings_);
+    if (result != domain::PointResult::IGNORED)
+      setManualSubtractActive(false);
     if (result == domain::PointResult::FINISHED) {
       domain::EventRecord record = makeEvent(domain::DomainEventType::FINISH);
       record.segmentIndex = endedSegment;
@@ -271,6 +309,7 @@ void ApplicationCore::handleButton(const ButtonEvent& event) {
       event.eventType == ButtonEventType::LongStart) {
     if (screen_ == Screen::BasicView &&
         competition_.state() == domain::CompetitionState::RUNNING) {
+      setManualSubtractActive(false);
       overrideMenuAction_ = OverrideMenuAction::AdditionalOrder;
       screen_ = Screen::OverrideMenu;
     }
@@ -705,10 +744,20 @@ void ApplicationCore::handleBasicView(const ButtonEvent& event) {
     finishResultDismissed_ = true;
     return;
   }
-  if (event.buttonId == ButtonId::Down) {
+  if (event.buttonId == ButtonId::Right &&
+      competition_.state() == domain::CompetitionState::RUNNING) {
+    setManualSubtractActive(false);
+    editedTimeAdjustmentSeconds_ = 0;
+    timeAdjustmentEditing_ = true;
+  } else if (event.buttonId == ButtonId::Down) {
+    setManualSubtractActive(false);
     openMainMenu(0);
   } else if (event.buttonId == ButtonId::Up) {
+    setManualSubtractActive(false);
     openMainMenu(countOf(MAIN_ITEMS) - 1);
+  } else if (event.buttonId == ButtonId::Left &&
+             canToggleManualSubtract()) {
+    setManualSubtractActive(!manualSubtractActive_);
   } else if (event.buttonId == ButtonId::Right &&
              competition_.beginStartTimeCorrection()) {
     editedStageStartTime_ = competition_.proposedStartClockTime();
@@ -717,6 +766,71 @@ void ApplicationCore::handleBasicView(const ButtonEvent& event) {
     stageStartProposalExpired_ = false;
     startTimeCorrection_ = true;
     screen_ = Screen::StartTimeEdit;
+  }
+}
+
+namespace {
+
+const char* fontSizeLabel(domain::MenuFontSize value) {
+  switch (value) {
+    case domain::MenuFontSize::SMALL:
+      return "KOKO: PIENI";
+    case domain::MenuFontSize::LARGE:
+      return "KOKO: SUURI";
+    case domain::MenuFontSize::MEDIUM:
+    default:
+      return "KOKO: KESKI";
+  }
+}
+
+const char* tripDisplayLabel(domain::TripDisplayMode value) {
+  switch (value) {
+    case domain::TripDisplayMode::TRIP_2:
+      return "NAYTA: TRIP2";
+    case domain::TripDisplayMode::BOTH:
+      return "NAYTA: TRIP1+2";
+    case domain::TripDisplayMode::TRIP_1:
+    default:
+      return "NAYTA: TRIP1";
+  }
+}
+
+const char* externalResetLabel(domain::TripResetTarget value) {
+  return value == domain::TripResetTarget::TRIP_2 ? "ULK.NOLLAUS: 2"
+                                                   : "ULK.NOLLAUS: 1";
+}
+
+const char* internalResetLabel(domain::TripResetTarget value) {
+  return value == domain::TripResetTarget::TRIP_2 ? "SIS.NOLLAUS: 2"
+                                                   : "SIS.NOLLAUS: 1";
+}
+
+}  // namespace
+
+void ApplicationCore::handleTimeAdjustment(const ButtonEvent& event) {
+  if (event.eventType != ButtonEventType::Press) return;
+  if (event.buttonId == ButtonId::Up) {
+    if (editedTimeAdjustmentSeconds_ <=
+        MAX_TIME_ADJUSTMENT_SECONDS - TIME_ADJUSTMENT_STEP_SECONDS)
+      editedTimeAdjustmentSeconds_ += TIME_ADJUSTMENT_STEP_SECONDS;
+  } else if (event.buttonId == ButtonId::Down) {
+    if (editedTimeAdjustmentSeconds_ >=
+        -MAX_TIME_ADJUSTMENT_SECONDS + TIME_ADJUSTMENT_STEP_SECONDS)
+      editedTimeAdjustmentSeconds_ -= TIME_ADJUSTMENT_STEP_SECONDS;
+  } else if (event.buttonId == ButtonId::Left) {
+    editedTimeAdjustmentSeconds_ = 0;
+    timeAdjustmentEditing_ = false;
+  } else if (event.buttonId == ButtonId::Right) {
+    if (editedTimeAdjustmentSeconds_ != 0 &&
+        competition_.applyTimeAdjustmentMilliseconds(
+            static_cast<int64_t>(editedTimeAdjustmentSeconds_) * 1000LL)) {
+      domain::EventRecord record =
+          makeEvent(domain::DomainEventType::TIME_ADJUSTMENT);
+      record.payload.timeAdjustmentSeconds = editedTimeAdjustmentSeconds_;
+      appendEvent(record);
+    }
+    editedTimeAdjustmentSeconds_ = 0;
+    timeAdjustmentEditing_ = false;
   }
 }
 
@@ -770,6 +884,88 @@ void ApplicationCore::handleMenu(const ButtonEvent& event) {
       if (editedDisplaySettings_.showLabels == displaySettings_.showLabels) {
         openSubmenu(MenuPage::Display);
         menuSelectedIndex_ = 2;
+      } else {
+        displaySettingsSavePending_ = true;
+      }
+    }
+    return;
+  }
+  if (menuPage_ == MenuPage::MenuFontSize) {
+    if (step && event.buttonId == ButtonId::Up) {
+      const uint8_t value = static_cast<uint8_t>(editedDisplaySettings_.menuFontSize);
+      editedDisplaySettings_.menuFontSize = static_cast<domain::MenuFontSize>(
+          value >= static_cast<uint8_t>(domain::MenuFontSize::LARGE)
+              ? 0
+              : value + 1);
+    } else if (step && event.buttonId == ButtonId::Down) {
+      const uint8_t value = static_cast<uint8_t>(editedDisplaySettings_.menuFontSize);
+      editedDisplaySettings_.menuFontSize = static_cast<domain::MenuFontSize>(
+          value == 0
+              ? static_cast<uint8_t>(domain::MenuFontSize::LARGE)
+              : value - 1);
+    } else if (event.eventType == ButtonEventType::Press &&
+               event.buttonId == ButtonId::Left) {
+      editedDisplaySettings_ = displaySettings_;
+      openSubmenu(MenuPage::Display);
+      menuSelectedIndex_ = 3;
+    } else if (event.eventType == ButtonEventType::Press &&
+               event.buttonId == ButtonId::Right &&
+               !displaySettingsSaveInFlight_) {
+      if (domain::sameDisplaySettings(editedDisplaySettings_,
+                                      displaySettings_)) {
+        openSubmenu(MenuPage::Display);
+        menuSelectedIndex_ = 3;
+      } else {
+        displaySettingsSavePending_ = true;
+      }
+    }
+    return;
+  }
+  if (menuPage_ == MenuPage::TripDisplay ||
+      menuPage_ == MenuPage::ExternalTripReset ||
+      menuPage_ == MenuPage::InternalTripReset) {
+    if (step && (event.buttonId == ButtonId::Up ||
+                 event.buttonId == ButtonId::Down)) {
+      if (menuPage_ == MenuPage::TripDisplay) {
+        uint8_t value =
+            static_cast<uint8_t>(editedDisplaySettings_.tripDisplayMode);
+        if (event.buttonId == ButtonId::Up)
+          value = value >= static_cast<uint8_t>(domain::TripDisplayMode::BOTH)
+                      ? 0
+                      : value + 1;
+        else
+          value = value == 0
+                      ? static_cast<uint8_t>(domain::TripDisplayMode::BOTH)
+                      : value - 1;
+        editedDisplaySettings_.tripDisplayMode =
+            static_cast<domain::TripDisplayMode>(value);
+      } else {
+        domain::TripResetTarget& target =
+            menuPage_ == MenuPage::ExternalTripReset
+                ? editedDisplaySettings_.externalResetTarget
+                : editedDisplaySettings_.internalResetTarget;
+        target = target == domain::TripResetTarget::TRIP_1
+                     ? domain::TripResetTarget::TRIP_2
+                     : domain::TripResetTarget::TRIP_1;
+      }
+    } else if (event.eventType == ButtonEventType::Press &&
+               event.buttonId == ButtonId::Left) {
+      const MenuPage page = menuPage_;
+      editedDisplaySettings_ = displaySettings_;
+      openSubmenu(MenuPage::Trips);
+      menuSelectedIndex_ = page == MenuPage::TripDisplay
+                               ? 0
+                               : (page == MenuPage::ExternalTripReset ? 1 : 2);
+    } else if (event.eventType == ButtonEventType::Press &&
+               event.buttonId == ButtonId::Right &&
+               !displaySettingsSaveInFlight_) {
+      if (domain::sameDisplaySettings(editedDisplaySettings_,
+                                      displaySettings_)) {
+        const MenuPage page = menuPage_;
+        openSubmenu(MenuPage::Trips);
+        menuSelectedIndex_ = page == MenuPage::TripDisplay
+                                 ? 0
+                                 : (page == MenuPage::ExternalTripReset ? 1 : 2);
       } else {
         displaySettingsSavePending_ = true;
       }
@@ -981,6 +1177,9 @@ void ApplicationCore::activateMenuItem() {
   } else if (menuPage_ == MenuPage::Display && menuSelectedIndex_ == 2) {
     editedDisplaySettings_ = displaySettings_;
     openSubmenu(MenuPage::DisplayLabels);
+  } else if (menuPage_ == MenuPage::Display && menuSelectedIndex_ == 3) {
+    editedDisplaySettings_ = displaySettings_;
+    openSubmenu(MenuPage::MenuFontSize);
   } else if (menuPage_ == MenuPage::TextColor) {
     editedTextColor_ = static_cast<domain::TextColor>(menuSelectedIndex_);
     textColorSavePending_ = true;
@@ -991,8 +1190,17 @@ void ApplicationCore::activateMenuItem() {
     screen_ = Screen::ResultView;
   } else if (menuPage_ == MenuPage::Trips) {
     if (menuSelectedIndex_ == 0) {
-      resetTrip1();
+      editedDisplaySettings_ = displaySettings_;
+      openSubmenu(MenuPage::TripDisplay);
     } else if (menuSelectedIndex_ == 1) {
+      editedDisplaySettings_ = displaySettings_;
+      openSubmenu(MenuPage::ExternalTripReset);
+    } else if (menuSelectedIndex_ == 2) {
+      editedDisplaySettings_ = displaySettings_;
+      openSubmenu(MenuPage::InternalTripReset);
+    } else if (menuSelectedIndex_ == 3) {
+      resetTrip1();
+    } else if (menuSelectedIndex_ == 4) {
       resetTrip2();
     }
   } else if (menuPage_ == MenuPage::System && menuSelectedIndex_ == 0) {
@@ -1063,7 +1271,8 @@ void ApplicationCore::handleDistancePulses(const DistancePulseEvent& event) {
     handleReverseSignal({event.reverseActive,
                          static_cast<uint32_t>(event.observedAtUs / 1000UL)});
   }
-  const int64_t distanceDelta = event.reverseActive ? -magnitude : magnitude;
+  const bool subtractDistance = event.reverseActive || manualSubtractActive_;
+  const int64_t distanceDelta = subtractDistance ? -magnitude : magnitude;
   totalPulseCount_ =
       domain::motion::saturatingAdd(totalPulseCount_, event.pulseCount);
   addDistance(distanceDelta, event.pulseCount);
@@ -1155,6 +1364,11 @@ DisplayModel ApplicationCore::displayModel() const {
           ? editedDisplaySettings_.backlightPercent
           : displaySettings_.backlightPercent;
   model.showLabels = displaySettings_.showLabels;
+  model.menuFontSize =
+      menuPage_ == MenuPage::MenuFontSize && screen_ == Screen::Menu
+          ? editedDisplaySettings_.menuFontSize
+          : displaySettings_.menuFontSize;
+  model.tripDisplayMode = displaySettings_.tripDisplayMode;
   model.clock = clock_.isSet() ? clock_.now() : ClockTime{0, 0, 0};
   model.speedKmh = speedCalculator_.speedKmh();
   model.showSpeed = debugDisplaySettings_.enabled(
@@ -1234,6 +1448,10 @@ DisplayModel ApplicationCore::displayModel() const {
   model.competition.deltaFrozen = competition_.deltaFrozen();
   model.competition.undoPromptVisible = competition_.hasUndoPrompt(
       clock_.isSet() ? clock_.elapsedSinceSetMilliseconds() : 0);
+  model.competition.manualSubtractActive = manualSubtractActive_;
+  model.competition.timeAdjustmentEditing = timeAdjustmentEditing_;
+  model.competition.editedTimeAdjustmentSeconds =
+      editedTimeAdjustmentSeconds_;
   const domain::SegmentDefinition* current = competition_.currentSegment();
   if (competition_.state() == domain::CompetitionState::WAIT_START) {
     if (current) {
@@ -1295,6 +1513,29 @@ DisplayModel ApplicationCore::displayModel() const {
         model.menu.rows[index].label = editedDisplaySettings_.showLabels
                                            ? "SELITTEET: PAALLA"
                                            : "SELITTEET: POIS";
+      } else if (menuPage_ == MenuPage::MenuFontSize && index == 0) {
+        model.menu.rows[index].label =
+            fontSizeLabel(editedDisplaySettings_.menuFontSize);
+      } else if (menuPage_ == MenuPage::Trips) {
+        const uint8_t absoluteIndex = menuScrollOffset_ + index;
+        if (absoluteIndex == 0)
+          model.menu.rows[index].label =
+              tripDisplayLabel(displaySettings_.tripDisplayMode);
+        else if (absoluteIndex == 1)
+          model.menu.rows[index].label =
+              externalResetLabel(displaySettings_.externalResetTarget);
+        else if (absoluteIndex == 2)
+          model.menu.rows[index].label =
+              internalResetLabel(displaySettings_.internalResetTarget);
+      } else if (menuPage_ == MenuPage::TripDisplay && index == 0) {
+        model.menu.rows[index].label =
+            tripDisplayLabel(editedDisplaySettings_.tripDisplayMode);
+      } else if (menuPage_ == MenuPage::ExternalTripReset && index == 0) {
+        model.menu.rows[index].label =
+            externalResetLabel(editedDisplaySettings_.externalResetTarget);
+      } else if (menuPage_ == MenuPage::InternalTripReset && index == 0) {
+        model.menu.rows[index].label =
+            internalResetLabel(editedDisplaySettings_.internalResetTarget);
       }
     }
   }
@@ -1453,12 +1694,25 @@ bool ApplicationCore::takeDisplaySettingsSaveRequest(
 
 void ApplicationCore::completeDisplaySettingsSave(bool succeeded) {
   if (!displaySettingsSaveInFlight_) return;
+  const MenuPage savedPage = menuPage_;
   displaySettingsSaveInFlight_ = false;
   if (succeeded) displaySettings_ = editedDisplaySettings_;
   editedDisplaySettings_ = displaySettings_;
-  const bool labels = menuPage_ == MenuPage::DisplayLabels;
-  openSubmenu(MenuPage::Display);
-  menuSelectedIndex_ = labels ? 2 : 0;
+  if (savedPage == MenuPage::TripDisplay ||
+      savedPage == MenuPage::ExternalTripReset ||
+      savedPage == MenuPage::InternalTripReset) {
+    openSubmenu(MenuPage::Trips);
+    menuSelectedIndex_ = savedPage == MenuPage::TripDisplay
+                             ? 0
+                             : (savedPage == MenuPage::ExternalTripReset ? 1
+                                                                         : 2);
+  } else {
+    openSubmenu(MenuPage::Display);
+    menuSelectedIndex_ = savedPage == MenuPage::DisplayLabels
+                             ? 2
+                             : (savedPage == MenuPage::MenuFontSize ? 3 : 0);
+  }
+  updateMenuScroll();
 }
 
 void ApplicationCore::setInitialRouteOrder(const domain::RouteOrder& order,
@@ -1538,6 +1792,7 @@ domain::EventRecord ApplicationCore::makeEvent(
           ? std::numeric_limits<int32_t>::max()
           : static_cast<int32_t>(speedMilli);
   record.reverseActive = reverseActive_;
+  record.manualSubtractActive = manualSubtractActive_;
   return record;
 }
 
@@ -1585,16 +1840,49 @@ void ApplicationCore::completeRouteOrderCompletion(bool succeeded) {
 
 void ApplicationCore::addDistance(int64_t deltaMillimeters,
                                   uint32_t pulseCount) {
-  if (!trip1ResetHeld_) {
+  if (!resetHeldFor(domain::TripResetTarget::TRIP_1)) {
     trip1DistanceMm_ = domain::motion::saturatingAddSigned(
         trip1DistanceMm_, deltaMillimeters);
     trip1PulseCount_ =
         domain::motion::saturatingAdd(trip1PulseCount_, pulseCount);
   }
-  trip2DistanceMm_ = domain::motion::saturatingAddSigned(
-      trip2DistanceMm_, deltaMillimeters);
-  trip2PulseCount_ =
-      domain::motion::saturatingAdd(trip2PulseCount_, pulseCount);
+  if (!resetHeldFor(domain::TripResetTarget::TRIP_2)) {
+    trip2DistanceMm_ = domain::motion::saturatingAddSigned(
+        trip2DistanceMm_, deltaMillimeters);
+    trip2PulseCount_ =
+        domain::motion::saturatingAdd(trip2PulseCount_, pulseCount);
+  }
+}
+
+bool ApplicationCore::canToggleManualSubtract() const {
+  if (competition_.state() != domain::CompetitionState::RUNNING) return false;
+  const domain::SegmentDefinition* segment = competition_.currentSegment();
+  return segment && segment->segmentType == domain::SegmentType::SPEED;
+}
+
+void ApplicationCore::setManualSubtractActive(bool active) {
+  if (manualSubtractActive_ == active) return;
+  manualSubtractActive_ = active;
+  domain::EventRecord record =
+      makeEvent(domain::DomainEventType::MANUAL_SUBTRACTION_CHANGED);
+  record.payload.manualSubtractActive = active;
+  appendEvent(record);
+}
+
+void ApplicationCore::resetSelectedTrip(domain::TripResetTarget target) {
+  if (target == domain::TripResetTarget::TRIP_2)
+    resetTrip2();
+  else
+    resetTrip1();
+}
+
+bool ApplicationCore::resetHeldFor(domain::TripResetTarget target) const {
+  const bool internalHeld =
+      internalResetHeld_ && displaySettings_.internalResetTarget == target;
+  const bool externalHeld =
+      (footResetHeld_ || secondExternalResetHeld_) &&
+      displaySettings_.externalResetTarget == target;
+  return internalHeld || externalHeld;
 }
 
 void ApplicationCore::updateMenuScroll() {

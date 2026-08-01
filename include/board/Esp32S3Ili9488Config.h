@@ -7,11 +7,12 @@
 #else
 constexpr uint8_t LOW = 0;
 constexpr uint8_t INPUT_PULLUP = 0x05;
-constexpr int RISING = 0x01;
+constexpr int FALLING = 0x02;
 #endif
 
 #define ASKOMPU_HAS_TRIP1_RESET_PIN 1
 #define ASKOMPU_HAS_FOOT_RESET_PIN 1
+#define ASKOMPU_HAS_LIGHT_SWITCH_PIN 1
 
 namespace BoardConfig {
 
@@ -25,6 +26,7 @@ constexpr uint8_t PIN_BUTTON_LEFT = Esp32S3Ili9488Pins::BUTTON_LEFT;
 constexpr uint8_t PIN_BUTTON_UP = Esp32S3Ili9488Pins::BUTTON_UP;
 constexpr uint8_t PIN_BUTTON_DOWN = Esp32S3Ili9488Pins::BUTTON_DOWN;
 constexpr uint8_t PIN_BUTTON_RIGHT = Esp32S3Ili9488Pins::BUTTON_RIGHT;
+constexpr uint8_t PIN_LIGHT_SWITCH = Esp32S3Ili9488Pins::LIGHT_SWITCH;
 constexpr uint8_t PIN_BUTTON_POINT = Esp32S3Ili9488Pins::BUTTON_POINT;
 constexpr uint8_t PIN_BUTTON_AT = Esp32S3Ili9488Pins::BUTTON_AT;
 constexpr uint8_t PIN_BUTTON_TRIP1_RESET =
@@ -41,10 +43,12 @@ constexpr uint8_t PIN_EXTERNAL_TRIP_RX_RESERVED =
     Esp32S3Ili9488Pins::EXTERNAL_TRIP_RX_RESERVED;
 
 constexpr uint8_t BUTTON_PRESSED_LEVEL = LOW;
+constexpr uint8_t LIGHT_SWITCH_ON_LEVEL = LOW;
+constexpr uint8_t LIGHT_SWITCH_INPUT_MODE = INPUT_PULLUP;
 constexpr uint8_t REVERSE_ACTIVE_LEVEL = LOW;
 constexpr uint8_t REVERSE_INPUT_MODE = INPUT_PULLUP;
 constexpr uint8_t PULSE_INPUT_MODE = INPUT_PULLUP;
-constexpr int PULSE_INTERRUPT_MODE = RISING;
+constexpr int PULSE_INTERRUPT_MODE = FALLING;
 
 #ifdef ARDUINO
 static_assert(TX == Esp32S3Ili9488Pins::UART0_TX,

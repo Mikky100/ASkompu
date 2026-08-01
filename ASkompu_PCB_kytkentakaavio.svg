@@ -1,0 +1,197 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="2000" height="1600" viewBox="0 0 2000 1600">
+  <defs>
+    <style>
+      .bg{fill:#f7f9fc}.panel{fill:#fff;stroke:#26364a;stroke-width:2;rx:14}
+      .conn{fill:#eef4fb;stroke:#245b8a;stroke-width:2}.mcu{fill:#eef9f1;stroke:#20703a;stroke-width:3}
+      .note{fill:#fff8dc;stroke:#b58a20;stroke-width:2}.wire{fill:none;stroke:#26364a;stroke-width:3;stroke-linecap:round;stroke-linejoin:round}
+      .pwr{fill:none;stroke:#b22828;stroke-width:3;stroke-linecap:round;stroke-linejoin:round}
+      .gnd{fill:none;stroke:#1d5880;stroke-width:3;stroke-linecap:round;stroke-linejoin:round}
+      .node{fill:#26364a}.title{font:700 34px Arial,sans-serif;fill:#172536}.sub{font:17px Arial,sans-serif;fill:#42556b}
+      .sec{font:700 21px Arial,sans-serif;fill:#172536}.txt{font:16px Arial,sans-serif;fill:#172536}
+      .small{font:14px Arial,sans-serif;fill:#42556b}.pin{font:700 15px Consolas,monospace;fill:#172536}
+      .val{font:700 15px Arial,sans-serif;fill:#7a2c20}
+    </style>
+    <g id="rh"><path class="wire" d="M0 0H14L24-11L40 11L56-11L72 11L88-11L98 0H112"/></g>
+    <g id="rv"><path class="wire" d="M0 0V13L-11 23L11 39L-11 55L11 71L-11 87L0 97V112"/></g>
+    <g id="cv"><path class="wire" d="M0 0V35M-18 35H18M-18 48H18M0 48V88"/></g>
+    <g id="gnd"><path class="gnd" d="M0 0V10M-17 10H17M-11 17H11M-5 24H5"/></g>
+    <g id="up"><path class="pwr" d="M0 25V7M-9 16L0 7L9 16"/></g>
+  </defs>
+
+  <rect class="bg" width="2000" height="1600"/>
+  <text class="title" x="50" y="50">ASkompu – piirilevyn tulo- ja taustavalokytkennät</text>
+  <text class="sub" x="50" y="80">Tilava suunnittelukaavio • ESP32-S3 N16R8 + ILI9488 • BC547B: 1=C, 2=B, 3=E (CBE)</text>
+
+  <!-- INPUTS -->
+  <rect class="panel" x="35" y="110" width="1400" height="1055"/>
+  <text class="sec" x="60" y="145">1. Maadoittavat tulot</text>
+  <text class="small" x="60" y="170">Jokaisessa ulkoisessa liittimessä pinni 1 on signaali ja pinni 2 yhteinen GND.</text>
+
+  <!-- SW row y=250 -->
+  <rect class="conn" x="65" y="205" width="260" height="95"/>
+  <text class="sec" x="82" y="232">J1 VALOKYTKIN</text>
+  <text class="pin" x="82" y="260">1 SW_CONTACT →</text><text class="pin" x="82" y="286">2 GND ←</text>
+  <circle class="node" cx="325" cy="255" r="5"/><circle class="node" cx="325" cy="282" r="5"/>
+  <path class="wire" d="M325 255H370"/><use href="#rh" x="370" y="255"/>
+  <text class="val" x="401" y="232">R1 1 kΩ</text>
+  <path class="wire" d="M482 255H940"/><circle class="node" cx="560" cy="255" r="5"/>
+  <use href="#rv" x="560" y="143"/><path class="pwr" d="M560 143V125"/>
+  <text class="val" x="585" y="165">R2 10 kΩ</text><text class="pin" x="600" y="135">+3V3</text>
+  <use href="#cv" x="700" y="255"/><path class="gnd" d="M700 343V365"/><use href="#gnd" x="700" y="365"/>
+  <text class="val" x="725" y="303">C1 1 µF</text><text class="small" x="725" y="325">plus GPIO-solmuun</text>
+  <path class="gnd" d="M325 282H345V365H500"/><use href="#gnd" x="500" y="365"/>
+  <text class="pin" x="760" y="242">SW_SENSE → GPIO8</text><text class="small" x="760" y="275">LOW = valot päällä</text>
+
+  <!-- SPEED row y=440 -->
+  <rect class="conn" x="65" y="395" width="260" height="95"/>
+  <text class="sec" x="82" y="422">J2 NOPEUS</text>
+  <text class="pin" x="82" y="450">1 SPEED_GND →</text><text class="pin" x="82" y="476">2 GND ←</text>
+  <circle class="node" cx="325" cy="445" r="5"/><circle class="node" cx="325" cy="472" r="5"/>
+  <path class="wire" d="M325 445H370"/><use href="#rh" x="370" y="445"/>
+  <text class="val" x="401" y="422">R3 1 kΩ</text>
+  <path class="wire" d="M482 445H940"/><circle class="node" cx="560" cy="445" r="5"/>
+  <use href="#rv" x="560" y="333"/><use href="#up" x="560" y="301"/>
+  <text class="val" x="585" y="355">R4 4,7 kΩ</text><text class="pin" x="600" y="317">+3V3</text>
+  <use href="#cv" x="700" y="445"/><path class="gnd" d="M700 533V555"/><use href="#gnd" x="700" y="555"/>
+  <text class="val" x="725" y="493">C2 330 nF</text>
+  <path class="gnd" d="M325 472H345V555H500"/><use href="#gnd" x="500" y="555"/>
+  <text class="pin" x="760" y="432">SPEED_IN → GPIO40</text><text class="small" x="760" y="465">FALLING; reed / OC</text>
+
+  <!-- REVERSE row y=630 -->
+  <rect class="conn" x="65" y="585" width="260" height="95"/>
+  <text class="sec" x="82" y="612">J3 PERUUTUS</text>
+  <text class="pin" x="82" y="640">1 REVERSE_GND →</text><text class="pin" x="82" y="666">2 GND ←</text>
+  <circle class="node" cx="325" cy="635" r="5"/><circle class="node" cx="325" cy="662" r="5"/>
+  <path class="wire" d="M325 635H370"/><use href="#rh" x="370" y="635"/>
+  <text class="val" x="401" y="612">R5 1 kΩ</text>
+  <path class="wire" d="M482 635H940"/><circle class="node" cx="560" cy="635" r="5"/>
+  <use href="#rv" x="560" y="523"/><use href="#up" x="560" y="491"/>
+  <text class="val" x="585" y="545">R6 4,7 kΩ</text><text class="pin" x="600" y="507">+3V3</text>
+  <use href="#cv" x="700" y="635"/><path class="gnd" d="M700 723V745"/><use href="#gnd" x="700" y="745"/>
+  <text class="val" x="725" y="683">C3 1 µF</text><text class="small" x="725" y="705">plus GPIO-solmuun</text>
+  <path class="gnd" d="M325 662H345V745H500"/><use href="#gnd" x="500" y="745"/>
+  <text class="pin" x="760" y="622">REVERSE_IN → GPIO41</text><text class="small" x="760" y="655">LOW = peruutus</text>
+
+  <!-- FOOT1 row y=820 -->
+  <rect class="conn" x="65" y="775" width="260" height="95"/>
+  <text class="sec" x="82" y="802">J4 JALKANOLLAUS 1</text>
+  <text class="pin" x="82" y="830">1 FOOT1_GND →</text><text class="pin" x="82" y="856">2 GND ←</text>
+  <circle class="node" cx="325" cy="825" r="5"/><circle class="node" cx="325" cy="852" r="5"/>
+  <path class="wire" d="M325 825H370"/><use href="#rh" x="370" y="825"/>
+  <text class="val" x="401" y="802">R7 1 kΩ</text>
+  <path class="wire" d="M482 825H940"/><circle class="node" cx="560" cy="825" r="5"/>
+  <use href="#rv" x="560" y="713"/><use href="#up" x="560" y="681"/>
+  <text class="val" x="585" y="735">R8 4,7 kΩ</text><text class="pin" x="600" y="697">+3V3</text>
+  <use href="#cv" x="700" y="825"/><path class="gnd" d="M700 913V935"/><use href="#gnd" x="700" y="935"/>
+  <text class="val" x="725" y="873">C4 10 µF</text><text class="small" x="725" y="895">plus GPIO-solmuun</text>
+  <path class="gnd" d="M325 852H345V935H500"/><use href="#gnd" x="500" y="935"/>
+  <text class="pin" x="760" y="812">FOOT1_IN → GPIO42</text><text class="small" x="760" y="845">Valittu ulk. trippi</text>
+
+  <!-- FOOT2 row y=1010 -->
+  <rect class="conn" x="65" y="965" width="260" height="95"/>
+  <text class="sec" x="82" y="992">J5 JALKANOLLAUS 2</text>
+  <text class="pin" x="82" y="1020">1 FOOT2_GND →</text><text class="pin" x="82" y="1046">2 GND ←</text>
+  <circle class="node" cx="325" cy="1015" r="5"/><circle class="node" cx="325" cy="1042" r="5"/>
+  <path class="wire" d="M325 1015H370"/><use href="#rh" x="370" y="1015"/>
+  <text class="val" x="401" y="992">R9 1 kΩ</text>
+  <path class="wire" d="M482 1015H940"/><circle class="node" cx="560" cy="1015" r="5"/>
+  <use href="#rv" x="560" y="903"/><use href="#up" x="560" y="871"/>
+  <text class="val" x="575" y="925">R10 4,7 kΩ</text><text class="pin" x="600" y="887">+3V3</text>
+  <use href="#cv" x="700" y="1015"/><path class="gnd" d="M700 1103V1125"/><use href="#gnd" x="700" y="1125"/>
+  <text class="val" x="725" y="1063">C5 10 µF</text><text class="small" x="725" y="1085">plus GPIO-solmuun</text>
+  <path class="gnd" d="M325 1042H345V1125H500"/><use href="#gnd" x="500" y="1125"/>
+  <text class="pin" x="760" y="1002">FOOT2_IN → GPIO39</text><text class="small" x="760" y="1035">Valittu ulk. trippi</text>
+
+  <!-- MCU -->
+  <rect class="mcu" x="940" y="190" width="450" height="900"/>
+  <text class="sec" x="970" y="225">H1 → ESP32-S3 N16R8</text>
+  <text class="pin" x="970" y="262">3 GPIO8  IN ← SW_SENSE</text>
+  <text class="pin" x="970" y="452">4 GPIO40 IN ← SPEED_IN</text>
+  <text class="pin" x="970" y="642">5 GPIO41 IN ← REVERSE_IN</text>
+  <text class="pin" x="970" y="832">6 GPIO42 IN ← FOOT1_IN</text>
+  <text class="pin" x="970" y="1022">7 GPIO39 IN ← FOOT2_IN</text>
+  <text class="small" x="970" y="295">GPIO8: valokytkimen tulo</text>
+  <text class="small" x="970" y="485">GPIO40: nopeuden laskeva reuna</text>
+  <text class="small" x="970" y="675">GPIO41: peruutus aktiivinen LOW</text>
+  <text class="small" x="970" y="865">GPIO42: ulkoinen nollaus 1</text>
+  <text class="small" x="970" y="1055">GPIO39: ulkoinen nollaus 2</text>
+  <text class="pin" x="970" y="350">1 +3V3 OUT → ylösvedot</text>
+  <text class="pin" x="970" y="382">2 GND ↔ yhteinen maa</text>
+
+  <!-- Notes -->
+  <rect class="note" x="1470" y="110" width="490" height="1055" rx="14"/>
+  <text class="sec" x="1500" y="150">Liitin- ja toimintahuomiot</text>
+  <text class="txt" x="1500" y="190">• J1 avoin: GPIO8 HIGH ja valot pois.</text>
+  <text class="txt" x="1500" y="225">• J1 suljettu maahan: valot päällä.</text>
+  <text class="txt" x="1500" y="275">• J2 hyväksyy avoimen kollektorin tai reedin.</text>
+  <text class="txt" x="1500" y="310">• Nopeuden RC-aikavakio on noin 1,55 ms.</text>
+  <text class="txt" x="1500" y="345">• Mahdollinen reed-tuplapulssi suodatetaan</text>
+  <text class="txt" x="1520" y="372">tarvittaessa ohjelmistossa.</text>
+  <text class="txt" x="1500" y="425">• J3 on yhtenäinen maadoittava peruutustaso.</text>
+  <text class="txt" x="1500" y="475">• J4 ja J5 ovat ulkoisia nollaustuloja.</text>
+  <text class="txt" x="1500" y="510">• Molemmat nollaavat valikossa valitun tripin.</text>
+  <text class="txt" x="1500" y="560">• Kaikki tulot ovat 3,3 V logiikkatuloja.</text>
+  <text class="txt" x="1500" y="595">• Ulkoinen laite vain sulkee tulon maahan.</text>
+  <text class="txt" x="1500" y="660">Elektrolyyttikondensaattorit:</text>
+  <text class="txt" x="1520" y="695">plus GPIO-solmuun, miinus GND:hen.</text>
+  <text class="txt" x="1500" y="760">Nuoli → tarkoittaa lähtöä liittimestä.</text>
+  <text class="txt" x="1500" y="795">Nuoli ← tarkoittaa tuloa liittimeen.</text>
+  <text class="sec" x="1500" y="865">Tulopuolen komponentit</text>
+  <text class="pin" x="1500" y="905">1 kΩ    5 kpl</text>
+  <text class="pin" x="1500" y="938">4,7 kΩ  4 kpl</text>
+  <text class="pin" x="1500" y="971">10 kΩ   1 kpl</text>
+  <text class="pin" x="1500" y="1004">330 nF  1 kpl</text>
+  <text class="pin" x="1500" y="1037">1 µF    2 kpl</text>
+  <text class="pin" x="1500" y="1070">10 µF   2 kpl</text>
+
+  <!-- LIGHTING -->
+  <rect class="panel" x="35" y="1200" width="1925" height="345"/>
+  <text class="sec" x="60" y="1237">2. Näytön ja kolmen näppäimistöledin PWM-ohjaus</text>
+  <text class="small" x="60" y="1265">LEDien 220 Ω etuvastukset ovat johtosarjassa, eivät tällä piirilevyllä.</text>
+
+  <rect class="conn" x="65" y="1280" width="285" height="90"/>
+  <text class="sec" x="82" y="1310">H1.8 / GPIO9 PWM</text><text class="pin" x="82" y="1345">PWM_OUT →</text>
+  <circle class="node" cx="350" cy="1338" r="5"/><path class="wire" d="M350 1338H430"/>
+
+  <rect class="conn" x="65" y="1415" width="330" height="85"/>
+  <text class="sec" x="82" y="1445">J6 NÄYTÖN TAUSTAVALO</text><text class="pin" x="82" y="1480">1 TFT_LED / GPIO9 PWM →</text>
+  <path class="wire" d="M385 1338V1390H230V1415"/>
+
+  <use href="#rh" x="430" y="1338"/><text class="val" x="460" y="1315">R11 1 kΩ</text>
+  <path class="wire" d="M542 1338H690"/><circle class="node" cx="620" cy="1338" r="5"/>
+  <use href="#rv" x="620" y="1338"/><path class="gnd" d="M620 1450V1482"/><use href="#gnd" x="620" y="1482"/>
+  <text class="val" x="645" y="1400">R12 100 kΩ</text>
+
+  <!-- Q1 CBE -->
+  <circle cx="790" cy="1338" r="72" fill="#f5f0ff" stroke="#63398c" stroke-width="3"/>
+  <path class="wire" d="M690 1338H755M755 1295V1382M755 1310L820 1265V1218M755 1365L820 1410V1475"/>
+  <path class="wire" d="M805 1399L820 1410L813 1391"/>
+  <path class="gnd" d="M820 1475V1495"/><use href="#gnd" x="820" y="1495"/>
+  <text class="pin" x="828" y="1230">C (1)</text><text class="pin" x="705" y="1325">B (2)</text><text class="pin" x="828" y="1465">E (3)</text>
+  <text class="sec" x="735" y="1435">Q1 BC547B</text>
+
+  <!-- Cathode bus -->
+  <path class="wire" d="M820 1218V1260H1380V1490M1380 1348H1480M1380 1418H1480M1380 1488H1480"/>
+  <text class="pin" x="930" y="1248">LED_K_SW – Q1:n kollektorilta</text>
+
+  <!-- J8 below buses -->
+  <rect class="conn" x="1030" y="1460" width="300" height="70"/>
+  <text class="sec" x="1048" y="1485">J8 LED-SYÖTTÖ SISÄÄN</text>
+  <text class="pin" x="1048" y="1515">1 +5V ←    2 GND ↔</text>
+  <circle class="node" cx="1330" cy="1508" r="5"/>
+  <path class="pwr" d="M1330 1508H1420V1313H1480M1420 1383H1480M1420 1453H1480"/>
+  <path class="gnd" d="M1265 1518V1530"/><use href="#gnd" x="1265" y="1530"/>
+
+  <!-- J7 -->
+  <rect class="conn" x="1480" y="1270" width="445" height="250"/>
+  <text class="sec" x="1500" y="1300">J7 NÄPPÄIMISTÖLEDIT ULOS</text>
+  <text class="pin" x="1500" y="1325">1 LED1_A / +5V → ulkoinen 220 Ω + LED1</text>
+  <text class="pin" x="1500" y="1360">2 LED1_K_SW ← LED1 katodi</text>
+  <text class="pin" x="1500" y="1395">3 LED2_A / +5V → ulkoinen 220 Ω + LED2</text>
+  <text class="pin" x="1500" y="1430">4 LED2_K_SW ← LED2 katodi</text>
+  <text class="pin" x="1500" y="1465">5 LED3_A / +5V → ulkoinen 220 Ω + LED3</text>
+  <text class="pin" x="1500" y="1500">6 LED3_K_SW ← LED3 katodi</text>
+
+  <text class="small" x="50" y="1580">Suunnittelukuva • ASkompu prototyyppi • Toiminta ohjelmistossa verifioitu, piirilevy ei vielä hardware-verifioitu</text>
+</svg>

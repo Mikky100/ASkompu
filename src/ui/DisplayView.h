@@ -44,6 +44,8 @@ class DisplayView : public DisplayPort {
   uint32_t menuRowsFingerprint_ = 0;
   uint16_t textColor_ = TFT_WHITE;
   uint8_t backlightPercent_ = domain::DEFAULT_BACKLIGHT_PERCENT;
+  domain::MenuFontSize menuFontSize_ = domain::MenuFontSize::MEDIUM;
+  bool backlightEnabled_ = true;
   bool showLabels_ = true;
   bool spriteReady_ = false;
   bool hasRendered_ = false;

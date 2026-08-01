@@ -67,6 +67,7 @@ class CompetitionEngine {
   void rejectStartTimeCorrection(uint64_t monotonicMs);
   bool applyOverride(const SegmentOverride& requested,
                      SegmentOverride& accepted);
+  bool applyTimeAdjustmentMilliseconds(int64_t adjustmentMs);
   bool undoPoint(uint64_t monotonicMs);
 
   CompetitionState state() const { return state_; }

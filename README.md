@@ -63,6 +63,16 @@ After time acceptance the basic view shows:
   applicable; while waiting for a start, the segment that will begin is shown
   in the right-hand next-segment region;
 - optional rounded debug speed with `km/h` in its own bottom region.
+- on a running SPEED segment, a short Left toggles manual distance
+  subtraction when the point-undo window is not active. While enabled, forward
+  speed pulses reduce both trips and the competition distance/ideal time using
+  the same signed-distance path as reverse. A large red `MIINUSTUS` banner is
+  shown, and the mode clears at a point transition or when leaving the basic
+  view.
+- while a stage is running, Right opens a signed time adjustment in the
+  next-segment region. Up/Down changes it in 10-second steps, Right accepts and
+  Left cancels. An accepted adjustment changes the cumulative ideal time,
+  delta and eventual stage score, and is recorded in the event log.
 
 It contains no `MENU` or `DEV` text, menu hint, GPIO numbers, button states,
 total pulse count, pulse age, or calibration data. Debug speed defaults off and
@@ -259,6 +269,11 @@ only future pulses. The existing Preferences namespace and keys remain
 `askompu`, `schemaVersion`, and `mmPerPulseFixed`. Missing, incompatible, or
 out-of-range storage falls back safely to `1000 mm/pulse`.
 
+The hardware pulse interrupt rejects edges that would imply more than
+200 km/h. Its minimum accepted pulse interval is recalculated from the active
+millimetres-per-pulse calibration both at startup and after an accepted
+calibration change.
+
 The same settings repository validates `lateFactor` (default 1), `earlyFactor`
 (default 3), `jatResultSeconds` (0...20, default 5) and
 `atDisplayDistanceM` (1...20, default 10). Writes compare stored values and
@@ -283,10 +298,11 @@ Trip 1 or foot-reset input.
 | Function | GPIO |
 |---|---:|
 | Left / Up / Down / Right | 4 / 5 / 6 / 7 |
+| Active-low light switch | 8 |
 | Point / AT | 15 / 16 |
-| Trip 1 reset / Trip 2 reset | 17 / 18 |
-| Speed pulse / active-low reverse | 19 / 20 |
-| Foot reset | 21 |
+| Internal trip reset | 17 |
+| External trip resets 1 / 2 | 42 / 39 |
+| Speed pulse / active-low reverse | 40 / 41 |
 | External trip TX / RX | 47 / 48 (reserved only) |
 
 The ILI9488 cable bundle, starting from the display module's VCC pin, is:
@@ -309,11 +325,21 @@ the top and USB-C connectors at the bottom, the left-edge order is GPIO9 LED,
 GPIO10 SCK, GPIO11 MOSI, GPIO12 DC/RS, GPIO13 RESET, GPIO14 CS, 5V VCC and GND.
 Only the VCC and GND wires cross relative to the display module pin order.
 
-On the right edge the input order is GPIO21 foot reset, GPIO20 active-low
-reverse, GPIO19 speed pulse, then the shared GND for these three signals. The
-next GND remains unused. Foot reset is active LOW with the internal pull-up and
-performs the same Trip 1 reset operation as the dedicated Trip 1 button.
-GPIO1, GPIO2, GPIO8 and GPIO38 are deliberately left free by this profile;
+The four adjacent replacement inputs are GPIO39 external reset 2,
+GPIO40 speed pulse, GPIO41 active-low reverse and GPIO42 external reset 1. Both external
+reset inputs are active LOW with internal pull-ups and reset the trip selected
+by `TRIPIT > ULK.NOLLAUS`. The internal GPIO17 reset button uses the separately
+selected `SIS.NOLLAUS` target.
+The GPIO40 speed source is also active LOW: firmware counts its fast falling
+edge so the external pull-up/RC network's slower rising edge cannot create
+timing jitter.
+GPIO8 is the active-low light-switch input. Closing it to GND enables GPIO9
+PWM for both the display backlight and the keyboard-LED transistor described
+by the prototype wiring; opening it turns both light loads off while the ESP32,
+clock, pulses and competition calculation continue running. The input uses a
+20 ms stability filter in addition to the external pull-up/RC circuit.
+GPIO1, GPIO2, GPIO18, GPIO21 and GPIO38 are deliberately left free by this
+profile. GPIO19 and GPIO20 are reserved for native USB D-/D+;
 GPIO35-37 remain unavailable because of the N16R8 Octal PSRAM.
 
 The touch pins (`T_IRQ`, `T_DO`, `T_DIN`, `T_CS`, `T_CLK`) and all SD-card
@@ -321,25 +347,26 @@ pins are intentionally unused. The controller is selected entirely by the
 PlatformIO profile; a later verified ST7796S module can therefore change driver
 flags without modifying core or layout code.
 
-GPIO19 and GPIO20 are repurposed from native USB D-/D+ for pulse and reverse
-inputs. Consequently this profile disables native USB, USB CDC on boot, USB
-MSC and USB DFU. Use the right-hand USB-C connector, the YD-ESP32-S3 board's
-CH343P USB-UART/COM programming port, for esptool uploads and 115200 baud serial
-diagnostics. UART0 remains on GPIO43 TX and GPIO44 RX. Leave the left-hand
-native USB/OTG connector disconnected; it is not needed for programming or
-diagnostics.
+GPIO19 and GPIO20 remain available for native USB D-/D+. Hardware USB CDC/JTAG
+and USB CDC on boot are enabled, while USB MSC and USB DFU remain disabled.
+The left-hand native USB connector can therefore be used for programming and
+the firmware's `Serial` diagnostics. The right-hand CH343P USB-UART connector
+remains available for esptool uploads through UART0 on GPIO43 TX and GPIO44 RX,
+but normal firmware diagnostics are directed to native USB CDC.
 
 ## Physical ILI9488 verification checklist
 
 1. With both USB-C cables disconnected, continuity-check the wire colors,
    GPIO9-14 order, crossed VCC/GND pair and unconnected SDO/MISO.
-2. Connect only the right-hand CH343P USB-C port, upload over UART0 and confirm
-   boot diagnostics at 115200 baud; leave the native USB/OTG port disconnected.
+2. Confirm that the left-hand native USB-C port enumerates with GPIO19/20 free,
+   and verify that uploading and serial diagnostics work. The right-hand
+   CH343P USB-UART port remains an alternative.
 3. Confirm the module really contains an ILI9488 and verify 480x320 landscape
    orientation, RGB order, inversion and full-screen
    refresh without tearing or a persistent blank screen.
-4. Verify GPIO9 turns the active-HIGH backlight on and that boot does not flash
-   it unexpectedly.
+4. Verify that grounding GPIO8 enables GPIO9 PWM and opening GPIO8 disables
+   the display backlight and keyboard LEDs without stopping the clock or pulse
+   calculation.
 5. Exercise every top-row value and `-1234`, `0`, `+1234` delta values; confirm
    fixed positions, no clipping and no overlap at both short and long values.
 6. Verify TIME, SPEED, MITTIS, JAT, AT, finish, result, event, menu and editing
@@ -347,10 +374,11 @@ diagnostics.
 7. Open `JARJESTELMA > DEBUG > NOPEUS`, change it with Up/Down, accept with
    Right, reboot, and confirm persistence and
    that the bottom debug region never covers competition values.
-8. Using the shared adjacent GND, exercise GPIO19 speed pulses, GPIO20 reverse
-   and GPIO21 foot reset; separately verify Trip 1 and Trip 2 reset buttons.
-9. Confirm GPIO1, GPIO2, GPIO8 and GPIO38 remain unused and the left native USB
-   port does not enumerate or participate in normal operation.
+8. Using the shared GND, exercise GPIO40 speed pulses, GPIO41 reverse, and both
+   GPIO39/GPIO42 external reset inputs. Verify both external and GPIO17 internal
+   reset target selections for Trip 1 and Trip 2.
+9. Confirm GPIO1, GPIO2, GPIO18, GPIO21 and GPIO38 remain unused, while the left
+   native USB port enumerates without disturbing the inputs.
 10. Run long enough to detect SPI integrity, PSRAM allocation, thermal or power
    issues. Touch, SD and the reserved external-trip UART are outside this test.
 
@@ -383,9 +411,9 @@ start point. Trip 2 is never reset by JAT automation.
    pressed on the minute field; accept `0:00`, `7:05`, `12:30`, and `23:59`.
 2. Confirm acceptance starts at exactly `H:MM:00`, the clock advances, and a
    power cycle asks again rather than restoring time from NVS.
-3. Inspect the basic view for equal-size Trip 1 and clock values with Trip 2 hidden; confirm
-   speed is absent by default and no MENU, DEV, GPIO, button, total-pulse,
-   calibration, or debug text appears.
+3. Verify all three persistent menu font sizes and the Trip 1, Trip 2 and
+   side-by-side Trip 1+2 display modes. Confirm that the clock remains at the
+   bottom right and no stray small Trip 1 marker appears.
 4. Confirm Down opens the first wiki menu item, Up opens the last, the main menu
    wraps, long lists scroll, disabled rows cannot be activated, and Left returns.
 5. Edit time from the menu: cancel must preserve it; accept must reset seconds

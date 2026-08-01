@@ -23,6 +23,7 @@ constexpr uint8_t BUTTON_LEFT = 4;
 constexpr uint8_t BUTTON_UP = 5;
 constexpr uint8_t BUTTON_DOWN = 6;
 constexpr uint8_t BUTTON_RIGHT = 7;
+constexpr uint8_t LIGHT_SWITCH = 8;
 
 constexpr uint8_t DISPLAY_BACKLIGHT = TFT_BL;
 constexpr uint8_t DISPLAY_SCLK = TFT_SCLK;
@@ -36,16 +37,17 @@ constexpr bool DISPLAY_BACKLIGHT_ACTIVE_HIGH = TFT_BACKLIGHT_ON == 1;
 constexpr uint8_t BUTTON_POINT = 15;
 constexpr uint8_t BUTTON_AT = 16;
 constexpr uint8_t BUTTON_TRIP1_RESET = 17;
-constexpr uint8_t BUTTON_TRIP2_RESET = 18;
-constexpr uint8_t PULSE_INPUT = 19;
-constexpr uint8_t REVERSE_INPUT = 20;
-constexpr uint8_t BUTTON_FOOT_RESET = 21;
+constexpr uint8_t BUTTON_TRIP2_RESET = 39;
+constexpr uint8_t PULSE_INPUT = 40;
+constexpr bool PULSE_ACTIVE_LOW = true;
+constexpr uint8_t REVERSE_INPUT = 41;
+constexpr uint8_t BUTTON_FOOT_RESET = 42;
 constexpr uint8_t EXTERNAL_TRIP_TX_RESERVED = 47;
 constexpr uint8_t EXTERNAL_TRIP_RX_RESERVED = 48;
 
 constexpr uint8_t UART0_TX = 43;
 constexpr uint8_t UART0_RX = 44;
-constexpr bool NATIVE_USB_ENABLED = false;
+constexpr bool NATIVE_USB_ENABLED = true;
 
 constexpr uint64_t pinBit(uint8_t pin) { return UINT64_C(1) << pin; }
 constexpr uint8_t bitCount(uint64_t value) {
@@ -55,7 +57,8 @@ constexpr uint8_t bitCount(uint64_t value) {
 
 constexpr uint64_t USED_GPIO_MASK =
     pinBit(BUTTON_LEFT) | pinBit(BUTTON_UP) | pinBit(BUTTON_DOWN) |
-    pinBit(BUTTON_RIGHT) | pinBit(DISPLAY_BACKLIGHT) |
+    pinBit(BUTTON_RIGHT) | pinBit(LIGHT_SWITCH) |
+    pinBit(DISPLAY_BACKLIGHT) |
     pinBit(DISPLAY_SCLK) | pinBit(DISPLAY_MOSI) | pinBit(DISPLAY_DC) |
     pinBit(DISPLAY_RESET) | pinBit(DISPLAY_CS) | pinBit(BUTTON_POINT) |
     pinBit(BUTTON_AT) | pinBit(BUTTON_TRIP1_RESET) |
@@ -64,29 +67,29 @@ constexpr uint64_t USED_GPIO_MASK =
     pinBit(EXTERNAL_TRIP_TX_RESERVED) | pinBit(EXTERNAL_TRIP_RX_RESERVED);
 
 constexpr uint64_t RELEASED_GPIO_MASK =
-    pinBit(1) | pinBit(2) | pinBit(8) | pinBit(38);
+    pinBit(1) | pinBit(2) | pinBit(18) | pinBit(21) | pinBit(38);
 constexpr uint64_t OCTAL_PSRAM_RESERVED_GPIO_MASK =
     pinBit(35) | pinBit(36) | pinBit(37);
 
-static_assert(bitCount(USED_GPIO_MASK) == 19,
+static_assert(bitCount(USED_GPIO_MASK) == 20,
               "ESP32-S3 ILI9488 GPIO assignments must be unique");
 static_assert((USED_GPIO_MASK & RELEASED_GPIO_MASK) == 0,
-              "Released GPIO1/2/8/38 must remain unused");
+              "Released GPIO1/2/18/21/38 must remain unused");
 static_assert((USED_GPIO_MASK & OCTAL_PSRAM_RESERVED_GPIO_MASK) == 0,
               "GPIO35-37 are reserved by N16R8 Octal PSRAM");
-static_assert(PULSE_INPUT != 19 || !NATIVE_USB_ENABLED,
-              "GPIO19 pulse input conflicts with native USB D-");
-static_assert(REVERSE_INPUT != 20 || !NATIVE_USB_ENABLED,
-              "GPIO20 reverse input conflicts with native USB D+");
+static_assert(PULSE_INPUT != 19 && REVERSE_INPUT != 20,
+              "GPIO19/20 must remain available for native USB");
 
 }  // namespace Esp32S3Ili9488Pins
 #endif
 
-#if defined(ARDUINO_USB_MODE) && ARDUINO_USB_MODE != 0
-#error "esp32s3-ili9488-main must not enable USB Serial/JTAG"
+#if defined(ASKOMPU_BOARD_ILI9488_MAIN) && \
+    (!defined(ARDUINO_USB_MODE) || ARDUINO_USB_MODE != 1)
+#error "esp32s3-ili9488-main requires Hardware CDC and JTAG USB mode"
 #endif
-#if defined(ARDUINO_USB_CDC_ON_BOOT) && ARDUINO_USB_CDC_ON_BOOT != 0
-#error "esp32s3-ili9488-main must not enable USB CDC on boot"
+#if defined(ASKOMPU_BOARD_ILI9488_MAIN) && \
+    (!defined(ARDUINO_USB_CDC_ON_BOOT) || ARDUINO_USB_CDC_ON_BOOT != 1)
+#error "esp32s3-ili9488-main requires USB CDC on boot"
 #endif
 #if defined(ARDUINO_USB_MSC_ON_BOOT) && ARDUINO_USB_MSC_ON_BOOT != 0
 #error "esp32s3-ili9488-main must not enable USB MSC on boot"

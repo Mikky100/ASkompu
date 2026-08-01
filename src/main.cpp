@@ -5,6 +5,7 @@
 #include "DemoConfig.h"
 #include "core/ApplicationCore.h"
 #include "input/DebouncedButton.h"
+#include "input/PulseFilter.h"
 #include "input/PulseInput.h"
 #include "input/StableSignalFilter.h"
 #include "ports/ArduinoClock.h"
@@ -19,11 +20,14 @@ constexpr uint32_t POLL_INTERVAL_MS = 10;
 constexpr uint32_t POINT_LONG_PRESS_MS = 2000;
 constexpr uint32_t POINT_MINIMUM_PRESS_INTERVAL_MS = 500;
 constexpr uint32_t REVERSE_STABILITY_MS = 20;
+constexpr uint32_t LIGHT_SWITCH_STABILITY_MS = 20;
 constexpr uint32_t RIGHT_MINIMUM_PRESS_INTERVAL_MS = 350;
+constexpr uint32_t MAXIMUM_ACCEPTED_SPEED_KMH = 200;
 
 input::DebouncedButton leftButton(BoardConfig::PIN_BUTTON_LEFT,
                                   BoardConfig::BUTTON_PRESSED_LEVEL,
-                                  DEBOUNCE_MS);
+                                  DEBOUNCE_MS,
+                                  CalibrationConfig::LONG_PRESS_DELAY_MS);
 input::DebouncedButton upButton(BoardConfig::PIN_BUTTON_UP,
                                 BoardConfig::BUTTON_PRESSED_LEVEL,
                                 DEBOUNCE_MS,
@@ -60,6 +64,9 @@ input::DebouncedButton footResetButton(BoardConfig::PIN_BUTTON_FOOT_RESET,
                                        DEBOUNCE_MS);
 #endif
 input::StableSignalFilter reverseFilter(REVERSE_STABILITY_MS);
+#ifdef ASKOMPU_HAS_LIGHT_SWITCH_PIN
+input::StableSignalFilter lightSwitchFilter(LIGHT_SWITCH_STABILITY_MS);
+#endif
 input::PulseInput pulseInput(BoardConfig::PIN_PULSE_INPUT,
                              BoardConfig::PULSE_INPUT_MODE,
                              BoardConfig::PULSE_INTERRUPT_MODE);
@@ -129,6 +136,34 @@ bool dispatchPointButton(uint32_t nowMs) {
   return dispatched;
 }
 
+bool dispatchLeftButton(uint32_t nowMs) {
+  bool dispatched = false;
+  const bool diagnostics = application.screen() == core::Screen::Diagnostics;
+  if (leftButton.consumePressedEvent() && diagnostics) {
+    application.handleButton(
+        {core::ButtonId::Left, core::ButtonEventType::Press, nowMs});
+    dispatched = true;
+  }
+  if (leftButton.consumeLongPressEvent()) {
+    application.handleButton(
+        {core::ButtonId::Left, core::ButtonEventType::LongStart, nowMs});
+    dispatched = true;
+  }
+  if (leftButton.consumeReleasedEvent()) {
+    const bool shortPress = leftButton.consumeShortPressEvent();
+    if (diagnostics) {
+      application.handleButton(
+          {core::ButtonId::Left, core::ButtonEventType::Release, nowMs});
+      dispatched = true;
+    } else if (shortPress) {
+      application.handleButton(
+          {core::ButtonId::Left, core::ButtonEventType::Press, nowMs});
+      dispatched = true;
+    }
+  }
+  return dispatched;
+}
+
 bool dispatchRightButton(uint32_t nowMs) {
   bool dispatched = false;
   const bool diagnostics = application.screen() == core::Screen::Diagnostics;
@@ -166,6 +201,8 @@ void setup() {
   const settings::CalibrationLoadResult calibration =
       settingsRepository.loadCalibration();
   application.setInitialMillimetersPerPulse(calibration.millimetersPerPulse);
+  pulseInput.setMinimumPulseIntervalUs(input::minimumPulseIntervalUs(
+      calibration.millimetersPerPulse, MAXIMUM_ACCEPTED_SPEED_KMH));
   const settings::TextColorLoadResult textColor =
       settingsRepository.loadTextColor();
   application.setInitialTextColor(textColor.color);
@@ -200,8 +237,17 @@ void setup() {
 #ifdef ASKOMPU_HAS_FOOT_RESET_PIN
   footResetButton.begin();
 #endif
+#ifdef ASKOMPU_HAS_LIGHT_SWITCH_PIN
+  pinMode(BoardConfig::PIN_LIGHT_SWITCH, BoardConfig::LIGHT_SWITCH_INPUT_MODE);
+#endif
   pinMode(BoardConfig::PIN_REVERSE_INPUT, BoardConfig::REVERSE_INPUT_MODE);
   const uint32_t inputNowMs = clockSource.monotonicMilliseconds();
+#ifdef ASKOMPU_HAS_LIGHT_SWITCH_PIN
+  lightSwitchFilter.reset(
+      digitalRead(BoardConfig::PIN_LIGHT_SWITCH) ==
+          BoardConfig::LIGHT_SWITCH_ON_LEVEL,
+      inputNowMs);
+#endif
   reverseFilter.reset(
       digitalRead(BoardConfig::PIN_REVERSE_INPUT) ==
           BoardConfig::REVERSE_ACTIVE_LEVEL,
@@ -210,6 +256,9 @@ void setup() {
   pulseInput.begin();
 
   const bool displayReady = view.begin();
+#ifdef ASKOMPU_HAS_LIGHT_SWITCH_PIN
+  view.setBacklight(lightSwitchFilter.active());
+#endif
 #if defined(TFT_BL) && defined(TFT_BACKLIGHT_ON)
   Serial.printf("Display: buffer=%s, backlight GPIO%u=%s (read=%u)\n",
                 displayReady ? "ok" : "failed",
@@ -240,6 +289,14 @@ void loop() {
   footResetButton.update(nowMs);
 #endif
 
+#ifdef ASKOMPU_HAS_LIGHT_SWITCH_PIN
+  const bool rawLightsEnabled =
+      digitalRead(BoardConfig::PIN_LIGHT_SWITCH) ==
+      BoardConfig::LIGHT_SWITCH_ON_LEVEL;
+  if (lightSwitchFilter.update(rawLightsEnabled, nowMs))
+    view.setBacklight(lightSwitchFilter.active());
+#endif
+
   const bool rawReverse =
       digitalRead(BoardConfig::PIN_REVERSE_INPUT) ==
       BoardConfig::REVERSE_ACTIVE_LEVEL;
@@ -250,7 +307,7 @@ void loop() {
   const uint32_t nowUs = clockSource.monotonicMicroseconds();
 
   bool inputDispatched = false;
-  inputDispatched |= dispatchButton(leftButton, core::ButtonId::Left, nowMs);
+  inputDispatched |= dispatchLeftButton(nowMs);
   inputDispatched |= dispatchButton(upButton, core::ButtonId::Up, nowMs);
   inputDispatched |= dispatchButton(downButton, core::ButtonId::Down, nowMs);
   inputDispatched |= dispatchRightButton(nowMs);
@@ -277,6 +334,8 @@ void loop() {
     const bool saved = settingsRepository.saveCalibration(calibrationToSave);
     application.completeCalibrationSave(saved);
     if (saved) {
+      pulseInput.setMinimumPulseIntervalUs(input::minimumPulseIntervalUs(
+          calibrationToSave, MAXIMUM_ACCEPTED_SPEED_KMH));
       Serial.printf("Saved calibration: %lu mm/pulse\n",
                     static_cast<unsigned long>(calibrationToSave));
     }
