@@ -1,5 +1,7 @@
 # ASkompu multi-board application shell
 
+Wikissä https://github.com/Mikky100/ASkompu/wiki kerrottu toiminta suomeksi AI:lle selittämiseksi ja käyttäjien/kehittäjien avuksi. 
+
 Current release: **0.1.0 (prototype)**. This is the first versioned ASkompu
 release for hardware and in-car evaluation. It is not yet a production-ready
 or safety-certified navigation instrument; see [CHANGELOG.md](CHANGELOG.md) for
