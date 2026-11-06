@@ -158,8 +158,11 @@ void CompetitionEngine::updateCalculation(uint64_t monotonicMs) {
       state_ = CompetitionState::RUNNING;
     }
   }
+  const bool waitingAtMlaUla = state_ == CompetitionState::WAIT_START &&
+      stageIndex_ > 0 && (pendingJatType_ == JatType::EMIT_MLA ||
+                         pendingJatType_ == JatType::EMIT_ULA);
   idealTimeMs_ = saturatingAddInt64(idealBeforeSegmentMs_,
-                                    activeSegmentIdealMs());
+                                    waitingAtMlaUla ? 0 : activeSegmentIdealMs());
   deltaMs_ = saturatingAddInt64(idealTimeMs_, -realTimeMs_);
 }
 

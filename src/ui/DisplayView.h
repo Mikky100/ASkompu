@@ -32,6 +32,7 @@ class DisplayView : public DisplayPort {
   void showResultView(const core::ResultViewDisplayModel& model);
   void showOrderAccess(const core::OrderAccessDisplayModel& model);
   void showOrder(const core::OrderDisplayModel& model);
+  void showPulseDiagnostics(const core::DisplayModel& model);
   void showDiagnostics(const core::DiagnosticsDisplayModel& model);
   void drawFooter(const char* left, const char* upDown, const char* right,
                   uint16_t color);

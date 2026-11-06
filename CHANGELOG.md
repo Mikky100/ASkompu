@@ -1,6 +1,21 @@
 # Changelog
 
-## Unreleased
+## 0.1.1 — Verified prototype — 2026-11-06
+
+- Fixed JAT+ULA/MLA adding the next interval's ideal time before departure
+  (issue #6).
+- Start with the display lit and the power-switch function disabled each boot;
+  added session-only power-switch and display-off menu actions with key/reset
+  wake (issue #7).
+- Added shared internal-trip precision hysteresis: above 31 / below 29 km/h
+  continuously for 1500 ms, with truncation and unchanged internal distance
+  precision (issue #8).
+- Added bounded pulse diagnostics, separate observed/accepted/rejected/delivered
+  counters, timing history, anomaly capture and nonblocking USB reports without
+  changing the pulse filter (issue #9).
+- Verified 147 native tests, native and both hardware builds, ILI9488 upload
+  hash verification and live USB diagnostics. See
+  [verification scope](docs/releases/0.1.1.md) for remaining physical tests.
 
 - Added three persistent menu/label font sizes and removed automatic shrinking
   of individual menu rows and the stray small Trip 1 marker.

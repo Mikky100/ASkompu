@@ -77,8 +77,10 @@ constexpr MenuItem EXTERNAL_TRIP_RESET_ITEMS[] = {{"ULK.NOLLAUS", true}};
 constexpr MenuItem INTERNAL_TRIP_RESET_ITEMS[] = {{"SIS.NOLLAUS", true}};
 constexpr MenuItem SYSTEM_ITEMS[] = {{"DIAGNOSTIIKKA", true},
                                      {"DEBUG", true},
-                                     {"PAINIKEASETUKSET", false},
+                                     {"PAINIKEASETUKSET", true},
                                      {"MUUT ASETUKSET", false}};
+constexpr MenuItem BUTTON_ITEMS[] = {{"VIRTAPAINIKE: POIS", true},
+                                     {"SAMMUTA NAYTTO", true}};
 constexpr MenuItem DEBUG_ITEMS[] = {{"NOPEUS", true}};
 
 template <std::size_t N>
@@ -136,6 +138,10 @@ const MenuItem* itemsFor(MenuPage page, uint8_t& count, const char*& title) {
       title = "JARJESTELMA";
       count = countOf(SYSTEM_ITEMS);
       return SYSTEM_ITEMS;
+    case MenuPage::Buttons:
+      title = "PAINIKEASETUKSET";
+      count = countOf(BUTTON_ITEMS);
+      return BUTTON_ITEMS;
     case MenuPage::Debug:
       title = "DEBUG";
       count = countOf(DEBUG_ITEMS);
@@ -192,6 +198,7 @@ void ApplicationCore::setInitialMillimetersPerPulse(
 }
 
 void ApplicationCore::handleButton(const ButtonEvent& event) {
+  displayOn_ = true;
   lastButtonId_ = static_cast<uint8_t>(event.buttonId);
   lastButtonEventType_ = static_cast<uint8_t>(event.eventType);
   const uint8_t diagnosticIndex = diagnosticButtonIndex(event.buttonId);
@@ -404,7 +411,16 @@ void ApplicationCore::handleButton(const ButtonEvent& event) {
     case Screen::OrderEdit:
       handleOrderEditor(event);
       break;
+    case Screen::PulseDiagnostics:
+      if (event.eventType == ButtonEventType::Press) {
+        if (event.buttonId == ButtonId::Left) screen_ = Screen::Diagnostics;
+        if (event.buttonId == ButtonId::Down) pulseDiagnosticsReset_ = true;
+        if (event.buttonId == ButtonId::Right) pulseDiagnosticsDump_ = true;
+      }
+      break;
     case Screen::Diagnostics:
+      if (event.eventType == ButtonEventType::Press &&
+          event.buttonId == ButtonId::Right) screen_ = Screen::PulseDiagnostics;
       if (event.eventType == ButtonEventType::Press &&
           event.buttonId == ButtonId::Left) {
         openSubmenu(MenuPage::System);
@@ -1014,6 +1030,9 @@ void ApplicationCore::handleMenu(const ButtonEvent& event) {
              event.buttonId == ButtonId::Left) {
     if (menuPage_ == MenuPage::Main) {
       screen_ = Screen::BasicView;
+    } else if (menuPage_ == MenuPage::Buttons) {
+      openSubmenu(MenuPage::System);
+      menuSelectedIndex_ = 2;
     } else if (menuPage_ == MenuPage::TextColor) {
       openSubmenu(MenuPage::Display);
       menuSelectedIndex_ = 1;
@@ -1136,6 +1155,11 @@ void ApplicationCore::activateMenuItem() {
   if (menuSelectedIndex_ >= count || !items[menuSelectedIndex_].enabled) {
     return;
   }
+  if (menuPage_ == MenuPage::Buttons) {
+    if (menuSelectedIndex_ == 0) powerButtonEnabled_ = !powerButtonEnabled_;
+    else { displayOn_ = false; screen_ = Screen::BasicView; }
+    return;
+  }
   if (menuPage_ == MenuPage::Main) {
     mainMenuSelectedIndex_ = menuSelectedIndex_;
     if (menuSelectedIndex_ == 0) {
@@ -1205,6 +1229,8 @@ void ApplicationCore::activateMenuItem() {
     }
   } else if (menuPage_ == MenuPage::System && menuSelectedIndex_ == 0) {
     screen_ = Screen::Diagnostics;
+  } else if (menuPage_ == MenuPage::System && menuSelectedIndex_ == 2) {
+    openSubmenu(MenuPage::Buttons);
   } else if (menuPage_ == MenuPage::System && menuSelectedIndex_ == 1) {
     editedDebugDisplaySettings_ = debugDisplaySettings_;
     openSubmenu(MenuPage::Debug);
@@ -1315,6 +1341,10 @@ void ApplicationCore::tick(uint32_t nowUs) {
           : static_cast<uint32_t>(totalPulseCount_);
   speedCalculator_.update(nowUs, speedPulseCount, previousPulseAtUs_,
                           lastPulseAtUs_);
+  precisionElapsedUs_ += static_cast<uint32_t>(nowUs - precisionLastUs_);
+  precisionLastUs_ = nowUs;
+  tripPrecision_.update(speedCalculator_.speedKmh(),
+                        static_cast<uint32_t>(precisionElapsedUs_ / 1000ULL));
   if (clock_.isSet()) {
     clock_.now();
     const domain::CompetitionState before = competition_.state();
@@ -1358,6 +1388,13 @@ void ApplicationCore::tick(uint32_t nowUs) {
 DisplayModel ApplicationCore::displayModel() const {
   DisplayModel model{};
   model.screen = screen_;
+  model.pulseDiagnostics = pulseDiagnostics_;
+  model.pulseDiagnosticAgeUs = pulseDiagnosticAgeUs_;
+  model.pulseDiagnosticCalibration = millimetersPerPulse_;
+  model.pulseDiagnosticPin = pulseDiagnosticPin_;
+  model.pulseDiagnosticFalling = pulseDiagnosticFalling_;
+  model.displayOn = displayOn_;
+  model.tripTenMeterPrecision = tripPrecision_.tenMeters();
   model.textColor = textColor_;
   model.backlightPercent =
       menuPage_ == MenuPage::Brightness && screen_ == Screen::Menu
@@ -1540,6 +1577,10 @@ DisplayModel ApplicationCore::displayModel() const {
     }
   }
 
+  if (screen_ == Screen::Menu && menuPage_ == MenuPage::Buttons &&
+      menuScrollOffset_ == 0)
+    model.menu.rows[0].label = powerButtonEnabled_
+        ? "VIRTAPAINIKE: PAALLE" : "VIRTAPAINIKE: POIS";
   if (screen_ == Screen::Diagnostics) {
     model.diagnostics.currentScreen = screen_;
     for (uint8_t index = 0; index < 8; ++index) {

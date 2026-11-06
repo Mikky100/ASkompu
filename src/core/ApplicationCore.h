@@ -3,6 +3,7 @@
 #include <cstdint>
 
 #include "AppEvent.h"
+#include "domain/TripPrecision.h"
 #include "Clock.h"
 #include "DisplayModel.h"
 #include "domain/SpeedCalculator.h"
@@ -28,6 +29,7 @@ enum class MenuPage : uint8_t {
   InternalTripReset,
   System,
   Debug,
+  Buttons,
 };
 
 class ApplicationCore {
@@ -42,6 +44,22 @@ class ApplicationCore {
   void tick(uint32_t nowUs);
 
   DisplayModel displayModel() const;
+  void setPulseDiagnostics(const input::PulseDiagnosticsSnapshot& value,
+      uint32_t ageUs, uint8_t pin, bool falling) {
+    pulseDiagnostics_ = value; pulseDiagnosticAgeUs_ = ageUs;
+    pulseDiagnosticPin_ = pin; pulseDiagnosticFalling_ = falling;
+  }
+  bool takePulseDiagnosticsResetRequest() {
+    bool value = pulseDiagnosticsReset_; pulseDiagnosticsReset_ = false; return value;
+  }
+  bool takePulseDiagnosticsDumpRequest() {
+    bool value = pulseDiagnosticsDump_; pulseDiagnosticsDump_ = false; return value;
+  }
+  void handleLightSwitch(bool active) {
+    if (powerButtonEnabled_) displayOn_ = active;
+  }
+  bool displayOn() const { return displayOn_; }
+  void wakeDisplay() { displayOn_ = true; }
 
   bool takeCalibrationSaveRequest(uint32_t& millimetersPerPulse);
   void completeCalibrationSave(bool succeeded);
@@ -122,6 +140,16 @@ class ApplicationCore {
   uint8_t menuItemCount() const;
   bool menuWraps() const;
 
+  input::PulseDiagnosticsSnapshot pulseDiagnostics_;
+  uint32_t pulseDiagnosticAgeUs_ = 0;
+  uint8_t pulseDiagnosticPin_ = 0;
+  bool pulseDiagnosticFalling_ = true;
+  bool pulseDiagnosticsReset_ = false, pulseDiagnosticsDump_ = false;
+  bool displayOn_ = true;
+  bool powerButtonEnabled_ = false;
+  domain::TripPrecision tripPrecision_;
+  uint32_t precisionLastUs_ = 0;
+  uint64_t precisionElapsedUs_ = 0;
   Clock& clock_;
   domain::SpeedCalculator speedCalculator_;
   domain::CompetitionEngine competition_;

@@ -3,6 +3,7 @@
 #include <cstdint>
 
 #include "Clock.h"
+#include "input/PulseDiagnostics.h"
 #include "domain/DisplaySetting.h"
 #include "domain/CompetitionEngine.h"
 #include "domain/CompetitionRecords.h"
@@ -25,6 +26,7 @@ enum class Screen : uint8_t {
   OrderAccessPrompt,
   OrderEdit,
   Diagnostics,
+  PulseDiagnostics,
 };
 
 enum class TimeField : uint8_t { Hour, Minute };
@@ -179,6 +181,8 @@ struct DiagnosticsDisplayModel {
 
 struct DisplayModel {
   Screen screen;
+  bool displayOn;
+  bool tripTenMeterPrecision;
   domain::TextColor textColor;
   uint8_t backlightPercent;
   bool showLabels;
@@ -204,6 +208,11 @@ struct DisplayModel {
   CompetitionDisplayModel competition;
   MenuDisplayModel menu;
   DiagnosticsDisplayModel diagnostics;
+  input::PulseDiagnosticsSnapshot pulseDiagnostics;
+  uint32_t pulseDiagnosticAgeUs;
+  uint32_t pulseDiagnosticCalibration;
+  uint8_t pulseDiagnosticPin;
+  bool pulseDiagnosticFalling;
 };
 
 }  // namespace core

@@ -7,6 +7,7 @@
 #include "BoardConfig.h"
 #include "DisplayLayout.h"
 #include "RouteOrderFormatting.h"
+#include "TripFormatting.h"
 
 namespace ui {
 namespace {
@@ -25,24 +26,6 @@ constexpr uint16_t DISPLAY_RED = TFT_RED;
 constexpr uint16_t DISPLAY_GREEN = TFT_GREEN;
 constexpr uint16_t DISPLAY_WHITE = TFT_WHITE;
 #endif
-
-void formatTrip(char* text, size_t size, int64_t distanceMm) {
-  const bool negative = distanceMm < 0;
-  const uint64_t magnitude = negative
-                                 ? static_cast<uint64_t>(-(distanceMm + 1)) + 1
-                                 : static_cast<uint64_t>(distanceMm);
-  const uint64_t meters = magnitude / 1000ULL;
-  if (meters < 10000ULL) {
-    std::snprintf(text, size, "%s%" PRIu64 ".%03" PRIu64,
-                  negative ? "-" : "",
-                  meters / 1000ULL, meters % 1000ULL);
-  } else {
-    const uint64_t tenMeters = meters / 10ULL;
-    std::snprintf(text, size, "%s%" PRIu64 ".%02" PRIu64,
-                  negative ? "-" : "",
-                  tenMeters / 100ULL, tenMeters % 100ULL);
-  }
-}
 
 void formatDelta(char* text, size_t size, int64_t seconds) {
   if (seconds > 0)
@@ -225,6 +208,7 @@ bool DisplayView::begin() {
 }
 
 void DisplayView::setBacklight(bool enabled) {
+  if (backlightEnabled_ == enabled) return;
   backlightEnabled_ = enabled;
 #if defined(TFT_BL)
   pinMode(TFT_BL, OUTPUT);
@@ -310,6 +294,7 @@ void DisplayView::render(const core::DisplayModel& model) {
         layoutFor(BoardConfig::DISPLAY_WIDTH, BoardConfig::DISPLAY_HEIGHT);
     const bool tripChanged =
         lastModel_.tripDisplayMode != model.tripDisplayMode ||
+        lastModel_.tripTenMeterPrecision != model.tripTenMeterPrecision ||
         lastModel_.trip1.distanceMillimeters != model.trip1.distanceMillimeters ||
         lastModel_.trip2.distanceMillimeters != model.trip2.distanceMillimeters;
     if (tripChanged)
@@ -371,6 +356,9 @@ void DisplayView::render(const core::DisplayModel& model) {
     case core::Screen::OrderEdit:
       showOrder(model.order);
       break;
+    case core::Screen::PulseDiagnostics:
+      showPulseDiagnostics(model);
+      break;
     case core::Screen::Diagnostics:
       showDiagnostics(model.diagnostics);
       break;
@@ -412,6 +400,7 @@ void DisplayView::render(const core::DisplayModel& model) {
     } else {
       const bool tripChanged =
           lastModel_.tripDisplayMode != model.tripDisplayMode ||
+          lastModel_.tripTenMeterPrecision != model.tripTenMeterPrecision ||
           lastModel_.trip1.distanceMillimeters !=
               model.trip1.distanceMillimeters ||
           lastModel_.trip2.distanceMillimeters !=
@@ -455,7 +444,8 @@ void DisplayView::render(const core::DisplayModel& model) {
       canvas_.pushSprite(0, top, 0, top, BoardConfig::DISPLAY_WIDTH,
                          bottom - top);
     }
-  } else if (model.screen == core::Screen::Diagnostics) {
+  } else if (model.screen == core::Screen::Diagnostics ||
+             model.screen == core::Screen::PulseDiagnostics) {
     canvas_.pushSprite(0, 0);
   } else {
     const int16_t height = BoardConfig::DISPLAY_HEIGHT > 190
@@ -672,8 +662,8 @@ void DisplayView::showBasicView(const core::DisplayModel& model) {
   std::snprintf(clockText, sizeof(clockText), "%02u:%02u:%02u",
                 model.clock.hour, model.clock.minute, model.clock.second);
   std::snprintf(speedText, sizeof(speedText), "%.0f km/h", model.speedKmh);
-  formatTrip(trip1Text, sizeof(trip1Text), model.trip1.distanceMillimeters);
-  formatTrip(trip2Text, sizeof(trip2Text), model.trip2.distanceMillimeters);
+  formatTrip(trip1Text, sizeof(trip1Text), model.trip1.distanceMillimeters, model.tripTenMeterPrecision);
+  formatTrip(trip2Text, sizeof(trip2Text), model.trip2.distanceMillimeters, model.tripTenMeterPrecision);
   formatDelta(deltaText, sizeof(deltaText), model.competition.deltaSeconds);
   std::snprintf(atText, sizeof(atText), "%02u:%02u:%02u",
                 model.atOverlay.clockTime.hour, model.atOverlay.clockTime.minute,
@@ -1054,6 +1044,35 @@ void DisplayView::showOrder(const core::OrderDisplayModel& model) {
   }
 }
 
+void DisplayView::showPulseDiagnostics(const core::DisplayModel& model) {
+  const auto& d = model.pulseDiagnostics;
+  const bool large = BoardConfig::DISPLAY_WIDTH >= 480;
+  const int16_t step = large ? 25 : 14;
+  int16_t y = large ? 32 : 18;
+  char line[80];
+  canvas_.setTextDatum(TL_DATUM);
+  canvas_.setTextColor(textColor_, DISPLAY_BACKGROUND_COLOR);
+  canvas_.setTextSize(large ? 2 : 1);
+  canvas_.drawString("PULSSIDIAGNOSTIIKKA", 4, 1, 1);
+  auto row = [&](const char* value) { canvas_.drawString(value, 4, y, 1); y += step; };
+  std::snprintf(line, sizeof(line), "K %lu MIN %lu us GPIO%u %s",
+      (unsigned long)model.pulseDiagnosticCalibration,
+      (unsigned long)d.minimumIntervalUs, model.pulseDiagnosticPin,
+      model.pulseDiagnosticFalling ? "FALL" : "RISE"); row(line);
+  std::snprintf(line, sizeof(line), "HAVAITUT %lu", (unsigned long)d.observed); row(line);
+  std::snprintf(line, sizeof(line), "HYV %lu HYL %lu", (unsigned long)d.accepted, (unsigned long)d.rejected); row(line);
+  std::snprintf(line, sizeof(line), "VALITETYT %lu", (unsigned long)d.delivered); row(line);
+  std::snprintf(line, sizeof(line), "DT %lu EDGE %lu us", (unsigned long)d.acceptedIntervalUs, (unsigned long)d.observedIntervalUs); row(line);
+  std::snprintf(line, sizeof(line), "MIN %lu MAX %lu us", (unsigned long)d.minimumAcceptedUs, (unsigned long)d.maximumAcceptedUs); row(line);
+  std::snprintf(line, sizeof(line), "IKA %lu us HZ %.2f", (unsigned long)model.pulseDiagnosticAgeUs,
+      d.acceptedIntervalUs ? 1000000.0 / d.acceptedIntervalUs : 0.0); row(line);
+  std::snprintf(line, sizeof(line), "V %.2f OVF %u/%lu/%lu",
+      d.acceptedIntervalUs ? model.pulseDiagnosticCalibration * 3600.0 / d.acceptedIntervalUs : 0.0,
+      d.counterOverflow, (unsigned long)d.pendingOverflows, (unsigned long)d.lifetimeOverflows); row(line);
+  std::snprintf(line, sizeof(line), "HIST %u FREEZE %u AUTO %u", d.historySize, d.frozen, d.automaticTrigger); row(line);
+  drawFooter("VASEN: PALAA", "ALAS: NOLLAA", "OIKEA: USB", textColor_);
+}
+
 void DisplayView::showDiagnostics(
     const core::DiagnosticsDisplayModel& model) {
   char line[48];
@@ -1112,7 +1131,7 @@ void DisplayView::showDiagnostics(
   std::snprintf(line, sizeof(line), "KULUNUT %" PRIu64 " ms",
                 model.clockElapsedMilliseconds);
   canvas_.drawString(line, 4, y, 1);
-  drawFooter("VASEN: PALAA", "", "", textColor_);
+  drawFooter("VASEN: PALAA", "", "OIKEA: PULSSIT", textColor_);
 }
 
 }  // namespace ui

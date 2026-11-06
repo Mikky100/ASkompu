@@ -2,8 +2,9 @@
 
 Wikissä https://github.com/Mikky100/ASkompu/wiki kerrottu toiminta suomeksi AI:lle selittämiseksi ja käyttäjien/kehittäjien avuksi. 
 
-Current release: **0.1.0 (prototype)**. This is the first versioned ASkompu
-release for hardware and in-car evaluation. It is not yet a production-ready
+Current release: **0.1.1 (Verified prototype)**. Native tests, both firmware
+builds, ESP32-S3 ILI9488 installation and USB diagnostics are verified; see
+[verification details](docs/releases/0.1.1.md). It is not yet a production-ready
 or safety-certified navigation instrument; see [CHANGELOG.md](CHANGELOG.md) for
 the implemented scope and known limitations.
 
@@ -19,8 +20,9 @@ point undo, JAT stages, finish, scoring, AT, additional orders and road breaks
 run in RAM. JAT supports `MANNED_JAT`, `EMIT_JAT_OFFSET`, `EMIT_MLA` and
 `EMIT_ULA`, including their start-time proposals and physical stage-distance
 zero points. At JAT the completed delta is stored for scoring while the active
-competition clock resets to zero and remains stopped until the accepted next
-start time. MITTIS calibration proposals use integer arithmetic and a changed
+completed-stage accumulations reset. The new-stage delta follows the accepted
+start time; ULA/MLA adds the next interval's ideal time only when that start is
+reached. MITTIS calibration proposals use integer arithmetic and a changed
 factor affects only future pulses.
 
 At the start of every MITTIS segment, Trip 1 resets. Its displayed value stays
@@ -109,7 +111,7 @@ workflow; unavailable unrelated items remain visible but dimmed.
 | Pisteet ja tapahtumat | Jaksojen pisteet, Tapahtumat | Implemented from the current RAM event/result data; stage browsing also shows the total |
 | Näyttöasetukset | Kirkkaus, Tekstin väri, Näyttöselitteet | Persistent 10...100% PWM brightness, white/red/green text color, and label visibility are implemented |
 | Tripit | Nollaa Trip 1, Nollaa Trip 2, Ulkoinen trip | Both resets work; external display source needs its hardware/protocol adapter |
-| Järjestelmä | Diagnostiikka, Debug, Painikeasetukset, Muut asetukset | Diagnostics and persistent Debug speed work; button/system settings are not implemented |
+| Järjestelmä | Diagnostiikka, Debug, Painikeasetukset, Muut asetukset | Diagnostics, pulse capture, persistent Debug speed and session-only power/display-off settings work; other system settings remain unavailable |
 
 Calibration editing uses a draft value. Left cancels without changing the
 active value or requesting a write. Right accepts; an unchanged value requests
@@ -335,11 +337,13 @@ selected `SIS.NOLLAUS` target.
 The GPIO40 speed source is also active LOW: firmware counts its fast falling
 edge so the external pull-up/RC network's slower rising edge cannot create
 timing jitter.
-GPIO8 is the active-low light-switch input. Closing it to GND enables GPIO9
-PWM for both the display backlight and the keyboard-LED transistor described
-by the prototype wiring; opening it turns both light loads off while the ESP32,
-clock, pulses and competition calculation continue running. The input uses a
-20 ms stability filter in addition to the external pull-up/RC circuit.
+GPIO8 is the active-low light-switch input, disabled at every boot. The display
+starts lit. Enable it for the current session through
+`JARJESTELMA > PAINIKEASETUKSET > VIRTAPAINIKE`; its stable transitions control
+GPIO9 PWM. `SAMMUTA NAYTTO` works regardless of that setting. Any stable key
+or external reset wakes the display and retains its normal button action.
+Clock, pulses and competition continue while dark. This setting is not
+persisted. The input keeps its 20 ms stability filter.
 GPIO1, GPIO2, GPIO18, GPIO21 and GPIO38 are deliberately left free by this
 profile. GPIO19 and GPIO20 are reserved for native USB D-/D+;
 GPIO35-37 remain unavailable because of the N16R8 Octal PSRAM.
@@ -366,9 +370,10 @@ but normal firmware diagnostics are directed to native USB CDC.
 3. Confirm the module really contains an ILI9488 and verify 480x320 landscape
    orientation, RGB order, inversion and full-screen
    refresh without tearing or a persistent blank screen.
-4. Verify that grounding GPIO8 enables GPIO9 PWM and opening GPIO8 disables
-   the display backlight and keyboard LEDs without stopping the clock or pulse
-   calculation.
+4. Verify a lit display at boot with GPIO8 open or grounded. Enable
+   `VIRTAPAINIKE` in `PAINIKEASETUKSET` and check GPIO8 transitions, menu
+   display-off and wake with each key/external reset. Power cycle and verify
+   the power-button setting returns to off. Clock and pulses must continue.
 5. Exercise every top-row value and `-1234`, `0`, `+1234` delta values; confirm
    fixed positions, no clipping and no overlap at both short and long values.
 6. Verify TIME, SPEED, MITTIS, JAT, AT, finish, result, event, menu and editing
@@ -453,5 +458,45 @@ start point. Trip 2 is never reset by JAT automation.
 18. Open stage points, total points and event history; verify cancelled events
     are marked and finish keeps the current frozen clock/delta presentation.
 
-Firmware upload and serial-port testing are intentionally outside the automated
-workflow.
+Firmware upload and serial-port testing require a selected device and user
+authorization; they are separate from the native tests.
+
+
+## Issues #6–#9 (6 November 2026)
+
+- JAT+ULA/MLA includes the next interval's ideal time only at its accepted start,
+  once. Arrival 11:23:34, start 11:25 and TIME 5:00 targets 11:30.
+- The display starts lit; session-only power and menu display-off/wake behavior
+  is described above.
+- Both internal trips share >31 / <29 km/h hysteresis with a continuous 1500 ms
+  dwell. Existing pulse-derived speed/zero timeout is used without a new speed
+  filter. Below 10 km, coarse mode truncates to 10 m with three decimal places
+  (2.343 -> 2.340); 10 km and above retain two decimals. Distances and competition
+  calculations keep full precision.
+- `JARJESTELMA > DIAGNOSTIIKKA > Right` opens pulse diagnostics. Down resets
+  only diagnostics; Right freezes and dumps a report over native USB at 115200.
+  Serial commands `p` (capture/report) and `r` (reset diagnostics) also work.
+  Reports include observed/accepted/rejected/delivered counts, both distinct
+  edge and accepted intervals, age, min/max, frequency/speed, GPIO/edge,
+  overflow flags and history retention counters.
+- The fixed 32-edge history freezes on the first >=1.8x accepted interval or a
+  manual capture. It retains preceding samples. Reset rearms it. Counters keep
+  running while frozen; overwritten history and samples omitted after freeze
+  are reported separately. USB sends at most 64 bytes per loop when room is
+  available. No printing, allocation or NVS writes occur in the ISR.
+- Observed means ISR-observed edges, not every physical sensor pulse. A long
+  interval is a diagnostic hint and can also mean actual deceleration. Once
+  input stops and pending pulses drain, accepted and delivered should match
+  unless an overflow is reported. Reset atomically drains the old pending batch
+  to normal distance processing, excluding that batch from the new diagnostic
+  period; filter state, trips, calibration and competition are preserved.
+- Timestamps/intervals use unsigned microsecond differences across rollover.
+  A single interval/age >=2^32 us (~71.6 min) is ambiguous. Counters saturate
+  with explicit overflow reporting. Capture is RAM-only; save the USB report
+  before reset or loss of power.
+
+Native regression tests include 10,000 accepted pulses at 212 mm/pulse at
+20, 94.34, 166.67 and 262.05 Hz, with model/diagnostic reads and rejected short
+edges: exactly 2,120,000 mm per trip. Physical generator testing during SPI
+updates and USB output, car readability, and physical switch/wake verification
+remain necessary; native tests cannot verify signals that never reach the ISR.

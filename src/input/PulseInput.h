@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Arduino.h>
+#include "PulseDiagnostics.h"
 
 namespace input {
 
@@ -17,12 +18,17 @@ class PulseInput {
 
   void begin();
   void setMinimumPulseIntervalUs(uint32_t minimumIntervalUs);
-  PulseSnapshot consumeSnapshot();
+  PulseSnapshot consumeSnapshot(bool resetDiagnostics = false);
+  void recordDelivered(uint32_t count);
+  PulseDiagnosticsSnapshot diagnostics();
+  void freezeDiagnostics();
+  PulseTrace trace(uint8_t index);
 
  private:
   static void IRAM_ATTR interruptHandler(void* argument);
   void IRAM_ATTR onPulse();
 
+  PulseDiagnostics diagnostics_;
   const uint8_t pin_;
   const uint8_t inputMode_;
   const int interruptMode_;

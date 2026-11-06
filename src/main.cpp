@@ -9,6 +9,7 @@
 #include "input/PulseInput.h"
 #include "input/StableSignalFilter.h"
 #include "ports/ArduinoClock.h"
+#include "ports/PulseDiagnosticSerial.h"
 #include "settings/SettingsRepository.h"
 #include "settings/PreferencesRouteOrderStore.h"
 #include "ui/DisplayView.h"
@@ -82,6 +83,8 @@ ui::DisplayView view;
 uint32_t lastDisplayUpdateMs = 0;
 core::Screen renderedScreen = core::Screen::StartupTimeEntry;
 bool pointLongPressPending = false;
+ports::PulseDiagnosticSerial pulseSerial;
+bool serialResetRequested = false, serialDumpRequested = false;
 
 bool dispatchButton(input::DebouncedButton& button, core::ButtonId id,
                     uint32_t nowMs) {
@@ -167,11 +170,7 @@ bool dispatchLeftButton(uint32_t nowMs) {
 bool dispatchRightButton(uint32_t nowMs) {
   bool dispatched = false;
   const bool diagnostics = application.screen() == core::Screen::Diagnostics;
-  if (rightButton.consumePressedEvent() && diagnostics) {
-    application.handleButton({core::ButtonId::Right,
-                              core::ButtonEventType::Press, nowMs});
-    dispatched = true;
-  }
+  rightButton.consumePressedEvent();
   if (rightButton.consumeLongPressEvent()) {
     application.handleButton({core::ButtonId::Right,
                               core::ButtonEventType::LongStart, nowMs});
@@ -180,6 +179,8 @@ bool dispatchRightButton(uint32_t nowMs) {
   if (rightButton.consumeReleasedEvent()) {
     const bool shortPress = rightButton.consumeShortPressEvent();
     if (diagnostics) {
+      application.handleButton({core::ButtonId::Right,
+                                core::ButtonEventType::Press, nowMs});
       application.handleButton({core::ButtonId::Right,
                                 core::ButtonEventType::Release, nowMs});
       dispatched = true;
@@ -197,6 +198,7 @@ bool dispatchRightButton(uint32_t nowMs) {
 
 void setup() {
   Serial.begin(115200);
+  Serial.printf("ASkompu issues 6-9 build %s %s\n", __DATE__, __TIME__);
 
   const settings::CalibrationLoadResult calibration =
       settingsRepository.loadCalibration();
@@ -257,7 +259,7 @@ void setup() {
 
   const bool displayReady = view.begin();
 #ifdef ASKOMPU_HAS_LIGHT_SWITCH_PIN
-  view.setBacklight(lightSwitchFilter.active());
+  view.setBacklight(application.displayOn());
 #endif
 #if defined(TFT_BL) && defined(TFT_BACKLIGHT_ON)
   Serial.printf("Display: buffer=%s, backlight GPIO%u=%s (read=%u)\n",
@@ -294,8 +296,19 @@ void loop() {
       digitalRead(BoardConfig::PIN_LIGHT_SWITCH) ==
       BoardConfig::LIGHT_SWITCH_ON_LEVEL;
   if (lightSwitchFilter.update(rawLightsEnabled, nowMs))
-    view.setBacklight(lightSwitchFilter.active());
+    application.handleLightSwitch(lightSwitchFilter.active());
 #endif
+
+  if (leftButton.isPressed() || upButton.isPressed() || downButton.isPressed() ||
+      rightButton.isPressed() || pointButton.isPressed() || atButton.isPressed() ||
+      trip2ResetButton.isPressed()
+#ifdef ASKOMPU_HAS_TRIP1_RESET_PIN
+      || trip1ResetButton.isPressed()
+#endif
+#ifdef ASKOMPU_HAS_FOOT_RESET_PIN
+      || footResetButton.isPressed()
+#endif
+      ) application.wakeDisplay();
 
   const bool rawReverse =
       digitalRead(BoardConfig::PIN_REVERSE_INPUT) ==
@@ -303,7 +316,16 @@ void loop() {
   if (reverseFilter.update(rawReverse, nowMs))
     application.handleReverseSignal({reverseFilter.active(), nowMs});
 
-  const input::PulseSnapshot pulseSnapshot = pulseInput.consumeSnapshot();
+  for (uint8_t i = 0; i < 8 && Serial.available(); ++i) {
+    const char command = Serial.read();
+    if (command == 'p') serialDumpRequested = true;
+    if (command == 'r') serialResetRequested = true;
+  }
+  const bool menuResetRequested = application.takePulseDiagnosticsResetRequest();
+  const bool resetDiagnostics = serialResetRequested || menuResetRequested;
+  serialResetRequested = false;
+  if (resetDiagnostics) pulseSerial.cancel();
+  const input::PulseSnapshot pulseSnapshot = pulseInput.consumeSnapshot(resetDiagnostics);
   const uint32_t nowUs = clockSource.monotonicMicroseconds();
 
   bool inputDispatched = false;
@@ -327,7 +349,19 @@ void loop() {
   application.handleDistancePulses(
       {pulseSnapshot.pendingPulses, pulseSnapshot.previousPulseAtUs,
        pulseSnapshot.lastPulseAtUs, nowUs, reverseFilter.active()});
+  if (!resetDiagnostics) pulseInput.recordDelivered(pulseSnapshot.pendingPulses);
   application.tick(nowUs);
+  const bool menuDumpRequested = application.takePulseDiagnosticsDumpRequest();
+  if (serialDumpRequested || menuDumpRequested) {
+    serialDumpRequested = false;
+    pulseSerial.capture(pulseInput, application.millimetersPerPulse(),
+        BoardConfig::PIN_PULSE_INPUT, BoardConfig::PULSE_INTERRUPT_MODE == FALLING);
+  }
+  pulseSerial.service();
+  const auto pulseDiagnostics = pulseInput.diagnostics();
+  application.setPulseDiagnostics(pulseDiagnostics,
+      pulseDiagnostics.hasAccepted ? micros() - pulseDiagnostics.lastAcceptedUs : 0,
+      BoardConfig::PIN_PULSE_INPUT, BoardConfig::PULSE_INTERRUPT_MODE == FALLING);
 
   uint32_t calibrationToSave = 0;
   if (application.takeCalibrationSaveRequest(calibrationToSave)) {
@@ -370,13 +404,16 @@ void loop() {
   }
 
   const core::DisplayModel displayModel = application.displayModel();
+  view.setBacklight(displayModel.displayOn);
   const bool screenChanged = displayModel.screen != renderedScreen;
   const bool periodicScreen =
       displayModel.screen == core::Screen::BasicView ||
       displayModel.screen == core::Screen::StartTimeEdit ||
-      displayModel.screen == core::Screen::Diagnostics;
+      displayModel.screen == core::Screen::Diagnostics ||
+      displayModel.screen == core::Screen::PulseDiagnostics;
   const uint32_t periodicIntervalMs =
-      displayModel.screen == core::Screen::Diagnostics
+      (displayModel.screen == core::Screen::Diagnostics ||
+       displayModel.screen == core::Screen::PulseDiagnostics)
           ? 2000UL
           : BoardConfig::DISPLAY_UPDATE_INTERVAL_MS;
   if (inputDispatched || screenChanged ||
