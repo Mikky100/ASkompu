@@ -29,6 +29,11 @@ EventClockTime roundedMinuteProposal(EventClockTime arrival) {
   return clockFromSeconds(proposal);
 }
 
+EventClockTime addWholeMinutes(EventClockTime arrival, int16_t minutes) {
+  return clockFromSeconds(static_cast<int64_t>(secondsOfDay(arrival)) +
+                          static_cast<int64_t>(minutes) * 60LL);
+}
+
 int64_t saturatingToInt64(uint64_t value) {
   return value > static_cast<uint64_t>(std::numeric_limits<int64_t>::max())
              ? std::numeric_limits<int64_t>::max()
@@ -103,8 +108,10 @@ bool CompetitionEngine::activate(const RouteOrder& order,
   deltaFrozen_ = false;
   finalDeltaMs_ = 0;
   stageDistanceEnabled_ = true;
+  firstSegmentArmed_ = false;
   correctingStartTime_ = false;
   stageResults_.clear();
+  restoredStagePoints_ = 0;
   hasActiveOverride_ = false;
   mittisProposal_ = MittisProposal{};
   distanceWhileMittisPendingMm_ = 0;
@@ -128,6 +135,7 @@ const SegmentDefinition* CompetitionEngine::nextSegment() const {
 }
 
 int64_t CompetitionEngine::activeSegmentIdealMs() const {
+  if (!firstSegmentArmed_) return 0;
   const SegmentDefinition* segment = currentSegment();
   if (!segment) return 0;
   if (hasActiveOverride_ &&
@@ -158,11 +166,8 @@ void CompetitionEngine::updateCalculation(uint64_t monotonicMs) {
       state_ = CompetitionState::RUNNING;
     }
   }
-  const bool waitingAtMlaUla = state_ == CompetitionState::WAIT_START &&
-      stageIndex_ > 0 && (pendingJatType_ == JatType::EMIT_MLA ||
-                         pendingJatType_ == JatType::EMIT_ULA);
   idealTimeMs_ = saturatingAddInt64(idealBeforeSegmentMs_,
-                                    waitingAtMlaUla ? 0 : activeSegmentIdealMs());
+                                    activeSegmentIdealMs());
   deltaMs_ = saturatingAddInt64(idealTimeMs_, -realTimeMs_);
 }
 
@@ -177,6 +182,12 @@ void CompetitionEngine::tick(uint64_t monotonicMs) {
 
 void CompetitionEngine::addDistanceMillimeters(int64_t deltaMillimeters) {
   if (!active_ || state_ == CompetitionState::FINISHED) return;
+  if (deltaMillimeters != 0 && !firstSegmentArmed_ &&
+      (state_ == CompetitionState::WAIT_START ||
+       state_ == CompetitionState::RUNNING ||
+       state_ == CompetitionState::EDIT_START_TIME)) {
+    firstSegmentArmed_ = true;
+  }
   physicalDistanceMm_ = saturatingAddInt64(physicalDistanceMm_, deltaMillimeters);
   if (!stageDistanceEnabled_) return;
   stageDistanceMm_ = saturatingAddInt64(stageDistanceMm_, deltaMillimeters);
@@ -212,6 +223,12 @@ PointResult CompetitionEngine::pointReleased(uint64_t monotonicMs,
 PointResult CompetitionEngine::pointReleased(
     uint64_t monotonicMs, uint32_t millimetersPerPulse,
     EventClockTime clockTime, const CompetitionSettings& settings) {
+  if ((state_ == CompetitionState::WAIT_START ||
+       state_ == CompetitionState::RUNNING) && !firstSegmentArmed_) {
+    firstSegmentArmed_ = true;
+    updateCalculation(monotonicMs);
+    return PointResult::START_ARMED;
+  }
   if (state_ != CompetitionState::RUNNING) return PointResult::IGNORED;
   if (mittisProposal_.pending) return PointResult::IGNORED;
   pointClockTime_ = clockTime;
@@ -316,6 +333,7 @@ PointResult CompetitionEngine::finishJat(
   distanceWhileMittisPendingMm_ = 0;
   stageDistanceEnabled_ = pendingJatType_ == JatType::MANNED_JAT ||
                           pendingJatType_ == JatType::EMIT_JAT_OFFSET;
+  firstSegmentArmed_ = false;
   state_ = CompetitionState::JAT_RESULT;
   const uint64_t duration =
       static_cast<uint64_t>(settings_.jatResultSeconds) * 1000ULL;
@@ -323,20 +341,28 @@ PointResult CompetitionEngine::finishJat(
       duration > std::numeric_limits<uint64_t>::max() - monotonicMs
           ? std::numeric_limits<uint64_t>::max()
           : monotonicMs + duration;
-  if (duration == 0) beginNextStartTimeEdit();
+  if (pendingJatType_ == JatType::EMIT_JAT_OFFSET) {
+    proposedStartClockTime_ =
+        addWholeMinutes(arrivalClockTime_, pendingJatOffsetMinutes_);
+    state_ = CompetitionState::EDIT_START_TIME;
+    acceptNextStageStart(proposedStartClockTime_,
+                         secondsOfDay(arrivalClockTime_) * 1000UL,
+                         monotonicMs);
+  } else if (duration == 0) {
+    beginNextStartTimeEdit();
+  }
   return PointResult::JAT_COMPLETED;
 }
 
 void CompetitionEngine::beginNextStartTimeEdit() {
   if (state_ != CompetitionState::JAT_RESULT) return;
   if (pendingJatType_ == JatType::EMIT_JAT_OFFSET) {
-    proposedStartClockTime_ = clockFromSeconds(
-        static_cast<int64_t>(secondsOfDay(arrivalClockTime_)) +
-        static_cast<int64_t>(pendingJatOffsetMinutes_) * 60LL);
+    proposedStartClockTime_ =
+        addWholeMinutes(arrivalClockTime_, pendingJatOffsetMinutes_);
   } else {
     proposedStartClockTime_ = roundedMinuteProposal(arrivalClockTime_);
+    proposedStartClockTime_.second = 0;
   }
-  proposedStartClockTime_.second = 0;
   state_ = CompetitionState::EDIT_START_TIME;
 }
 
@@ -350,7 +376,7 @@ bool CompetitionEngine::acceptNextStageStart(
     uint64_t monotonicMs) {
   if (state_ != CompetitionState::EDIT_START_TIME ||
       acceptedClockTime.hour > 23 || acceptedClockTime.minute > 59 ||
-      acceptedClockTime.second != 0 || nowMillisecondsOfDay >= DAY_MS)
+      acceptedClockTime.second > 59 || nowMillisecondsOfDay >= DAY_MS)
     return false;
   proposedStartClockTime_ = acceptedClockTime;
   const int64_t acceptedMs =
@@ -462,6 +488,117 @@ bool CompetitionEngine::undoPoint(uint64_t monotonicMs) {
 
 bool CompetitionEngine::hasUndoPrompt(uint64_t monotonicMs) const {
   return undo_.valid && monotonicMs <= undo_.deadlineMonotonicMs;
+}
+
+CompetitionProgressSnapshot CompetitionEngine::progressSnapshot() const {
+  CompetitionProgressSnapshot snapshot;
+  snapshot.state = state_;
+  snapshot.currentSegmentIndex = currentSegmentIndex_;
+  snapshot.stageIndex = stageIndex_;
+  snapshot.idealBeforeSegmentMs = idealBeforeSegmentMs_;
+  snapshot.physicalDistanceMillimeters = physicalDistanceMm_;
+  snapshot.stageDistanceMillimeters = stageDistanceMm_;
+  snapshot.segmentDistanceMillimeters = segmentDistanceMm_;
+  snapshot.acceptedStartClockTime = acceptedStartClockTime_;
+  snapshot.arrivalClockTime = arrivalClockTime_;
+  snapshot.proposedStartClockTime = proposedStartClockTime_;
+  snapshot.finalDeltaMs = finalDeltaMs_;
+  snapshot.completedStagePoints = totalPoints();
+  snapshot.pendingJatType = pendingJatType_;
+  snapshot.pendingJatOffsetMinutes = pendingJatOffsetMinutes_;
+  snapshot.stageDistanceEnabled = stageDistanceEnabled_;
+  snapshot.firstSegmentArmed = firstSegmentArmed_;
+  snapshot.hasActiveOverride = hasActiveOverride_;
+  if (hasActiveOverride_) {
+    snapshot.activeOverrideType = activeOverride_.overrideType;
+    snapshot.overrideStartSegmentIndex = activeOverride_.startSegmentIndex;
+    snapshot.overrideEndPointIndex = activeOverride_.endPointIndex;
+    snapshot.overrideDurationSeconds =
+        activeOverride_.replacementDurationSeconds;
+    snapshot.overrideIdealBeforeMs = overrideIdealBeforeMs_;
+  }
+  return snapshot;
+}
+
+bool CompetitionEngine::restoreProgress(
+    const RouteOrder& order, const CompetitionProgressSnapshot& snapshot,
+    uint32_t nowMillisecondsOfDay, uint64_t monotonicMs) {
+  if (snapshot.schemaVersion != 2 ||
+      validateRouteOrder(order) != RouteOrderValidationError::NONE ||
+      snapshot.currentSegmentIndex >= order.segments.size() ||
+      nowMillisecondsOfDay >= DAY_MS ||
+      (snapshot.state != CompetitionState::WAIT_START &&
+       snapshot.state != CompetitionState::RUNNING &&
+       snapshot.state != CompetitionState::JAT_RESULT &&
+       snapshot.state != CompetitionState::EDIT_START_TIME))
+    return false;
+  order_ = order;
+  active_ = true;
+  state_ = snapshot.state;
+  currentSegmentIndex_ = snapshot.currentSegmentIndex;
+  stageIndex_ = snapshot.stageIndex;
+  idealBeforeSegmentMs_ = snapshot.idealBeforeSegmentMs;
+  physicalDistanceMm_ = snapshot.physicalDistanceMillimeters;
+  stageDistanceMm_ = snapshot.stageDistanceMillimeters;
+  segmentDistanceMm_ = snapshot.segmentDistanceMillimeters;
+  acceptedStartClockTime_ = snapshot.acceptedStartClockTime;
+  arrivalClockTime_ = snapshot.arrivalClockTime;
+  proposedStartClockTime_ = snapshot.proposedStartClockTime;
+  finalDeltaMs_ = snapshot.finalDeltaMs;
+  restoredStagePoints_ = snapshot.completedStagePoints;
+  pendingJatType_ = snapshot.pendingJatType;
+  pendingJatOffsetMinutes_ = snapshot.pendingJatOffsetMinutes;
+  stageDistanceEnabled_ = snapshot.stageDistanceEnabled;
+  firstSegmentArmed_ = snapshot.firstSegmentArmed;
+  hasActiveOverride_ = snapshot.hasActiveOverride;
+  if (hasActiveOverride_) {
+    if ((snapshot.activeOverrideType != OverrideType::ADDITIONAL_ORDER &&
+         snapshot.activeOverrideType != OverrideType::ROAD_BREAK) ||
+        snapshot.overrideStartSegmentIndex >= order.segments.size() ||
+        snapshot.overrideEndPointIndex <= snapshot.overrideStartSegmentIndex ||
+        snapshot.overrideEndPointIndex > order.segments.size() ||
+        snapshot.overrideDurationSeconds == 0 ||
+        snapshot.overrideDurationSeconds > 3599 ||
+        (snapshot.activeOverrideType == OverrideType::ROAD_BREAK &&
+         snapshot.overrideDurationSeconds != 660 &&
+         snapshot.overrideDurationSeconds != 1260 &&
+         snapshot.overrideDurationSeconds != 1860))
+      return false;
+    activeOverride_ = SegmentOverride{};
+    activeOverride_.overrideType = snapshot.activeOverrideType;
+    activeOverride_.startSegmentIndex = snapshot.overrideStartSegmentIndex;
+    activeOverride_.endPointIndex = snapshot.overrideEndPointIndex;
+    activeOverride_.replacementDurationSeconds =
+        snapshot.overrideDurationSeconds;
+    for (uint16_t index = activeOverride_.startSegmentIndex;
+         index < activeOverride_.endPointIndex; ++index)
+      activeOverride_.originalDefinitions.push_back(order.segments[index]);
+    overrideIdealBeforeMs_ = snapshot.overrideIdealBeforeMs;
+  }
+  lastMonotonicMs_ = monotonicMs;
+  const int64_t acceptedMs =
+      static_cast<int64_t>(secondsOfDay(acceptedStartClockTime_)) * 1000LL;
+  int64_t untilStartMs = acceptedMs - nowMillisecondsOfDay;
+  if (untilStartMs > HALF_DAY_MS) untilStartMs -= DAY_MS;
+  if (untilStartMs < -HALF_DAY_MS) untilStartMs += DAY_MS;
+  startTimelineMs_ = saturatingAddInt64(saturatingToInt64(monotonicMs),
+                                        untilStartMs);
+  acceptedStartTimelineMs_ = startTimelineMs_;
+  deltaFrozen_ = state_ == CompetitionState::JAT_RESULT ||
+                 state_ == CompetitionState::EDIT_START_TIME;
+  if (state_ == CompetitionState::JAT_RESULT)
+    beginNextStartTimeEdit();
+  if (state_ == CompetitionState::WAIT_START ||
+      state_ == CompetitionState::RUNNING)
+    updateCalculation(monotonicMs);
+  return true;
+}
+
+uint64_t CompetitionEngine::totalPoints() const {
+  const uint64_t current = totalStagePoints(stageResults_);
+  return current > std::numeric_limits<uint64_t>::max() - restoredStagePoints_
+             ? std::numeric_limits<uint64_t>::max()
+             : restoredStagePoints_ + current;
 }
 
 }  // namespace domain

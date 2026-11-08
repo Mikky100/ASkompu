@@ -182,13 +182,25 @@ DisplayView::DisplayView() : canvas_(&display_) {}
 
 bool DisplayView::begin() {
 #ifdef ASKOMPU_BOARD_ILI9488_MAIN
-  // Drive the external module's active-HIGH backlight before initialization.
-  setBacklight(true);
+  // Keep a white, not-yet-initialized panel hidden and give its 5 V rail time
+  // to settle before an explicit reset. The second init is a bounded recovery
+  // attempt for controllers that ignored the first SPI command sequence.
+  setBacklight(false);
+  delay(40);
+  pinMode(TFT_RST, OUTPUT);
+  digitalWrite(TFT_RST, HIGH);
+  delay(5);
+  digitalWrite(TFT_RST, LOW);
+  delay(20);
+  digitalWrite(TFT_RST, HIGH);
+  delay(120);
 #endif
   display_.init();
+#ifdef ASKOMPU_BOARD_ILI9488_MAIN
+  delay(20);
+  display_.init();
+#endif
   display_.setRotation(BoardConfig::DISPLAY_ROTATION);
-  // Re-assert the configured level after TFT_eSPI initialization as well.
-  setBacklight(true);
   canvas_.setColorDepth(16);
   if (BoardConfig::USE_PSRAM_SPRITE)
     canvas_.setAttribute(PSRAM_ENABLE, true);
@@ -200,15 +212,16 @@ bool DisplayView::begin() {
     display_.setTextDatum(MC_DATUM);
     display_.drawString("DISPLAY BUFFER ERROR", BoardConfig::DISPLAY_WIDTH / 2,
                         BoardConfig::DISPLAY_HEIGHT / 2, 2);
+    setBacklight(true);
     return false;
   }
   canvas_.fillSprite(DISPLAY_BACKGROUND_COLOR);
   canvas_.pushSprite(0, 0);
+  setBacklight(true);
   return true;
 }
 
 void DisplayView::setBacklight(bool enabled) {
-  if (backlightEnabled_ == enabled) return;
   backlightEnabled_ = enabled;
 #if defined(TFT_BL)
   pinMode(TFT_BL, OUTPUT);
@@ -361,6 +374,13 @@ void DisplayView::render(const core::DisplayModel& model) {
       break;
     case core::Screen::Diagnostics:
       showDiagnostics(model.diagnostics);
+      break;
+    case core::Screen::TripResetNotice:
+      canvas_.setTextColor(textColor_, DISPLAY_BACKGROUND_COLOR);
+      canvas_.setTextDatum(MC_DATUM);
+      canvas_.setTextSize(menuTextScale(model.menuFontSize));
+      canvas_.drawString("Nollattu", BoardConfig::DISPLAY_WIDTH / 2,
+                         BoardConfig::DISPLAY_HEIGHT / 2, 2);
       break;
   }
   if (!sameScreen || colorChanged || labelsChanged || fontChanged) {
@@ -568,28 +588,52 @@ void DisplayView::showOverrideEdit(
 void DisplayView::showJatResult(const core::JatResultDisplayModel& model) {
   char arrival[12];
   char delta[24];
+  char departure[12];
+  char current[20];
   std::snprintf(arrival, sizeof(arrival), "%02u:%02u:%02u",
                 model.arrivalClockTime.hour, model.arrivalClockTime.minute,
                 model.arrivalClockTime.second);
   formatDelta(delta, sizeof(delta), model.finalDeltaSeconds);
+  std::snprintf(departure, sizeof(departure), "%02u:%02u:%02u",
+                model.proposedStartClockTime.hour,
+                model.proposedStartClockTime.minute,
+                model.proposedStartClockTime.second);
+  std::snprintf(current, sizeof(current), "KELLO %02u:%02u:%02u",
+                model.currentClockTime.hour, model.currentClockTime.minute,
+                model.currentClockTime.second);
   canvas_.setTextDatum(TC_DATUM);
   canvas_.setTextColor(textColor_, DISPLAY_BACKGROUND_COLOR);
-  canvas_.drawString("JAT TULOAIKA", BoardConfig::DISPLAY_WIDTH / 2, 8, 2);
+  canvas_.drawString(model.automaticStartAccepted ? "JAT LAHTO AUTOMAATTINEN"
+                                                  : "JAT TULOAIKA",
+                     BoardConfig::DISPLAY_WIDTH / 2, 8, 2);
   canvas_.setTextDatum(MC_DATUM);
   canvas_.setTextSize(3);
   canvas_.setTextColor(textColor_, DISPLAY_BACKGROUND_COLOR);
-  canvas_.drawString(arrival, BoardConfig::DISPLAY_WIDTH / 2, 65, 2);
-  canvas_.setTextSize(2);
-  canvas_.setTextColor(textColor_, DISPLAY_BACKGROUND_COLOR);
-  canvas_.drawString(delta, BoardConfig::DISPLAY_WIDTH / 2, 118, 2);
+  canvas_.drawString(model.automaticStartAccepted ? departure : arrival,
+                     BoardConfig::DISPLAY_WIDTH / 2, 65, 2);
+  canvas_.setTextSize(1);
+  if (model.automaticStartAccepted) {
+    char detail[40];
+    std::snprintf(detail, sizeof(detail), "TULO %s  ERO %s", arrival, delta);
+    canvas_.drawString(current, BoardConfig::DISPLAY_WIDTH / 2, 105, 2);
+    canvas_.drawString(detail, BoardConfig::DISPLAY_WIDTH / 2, 128, 2);
+  } else {
+    canvas_.setTextSize(2);
+    canvas_.drawString(delta, BoardConfig::DISPLAY_WIDTH / 2, 118, 2);
+  }
   drawFooter("", "", "OIKEA: JATKA", textColor_);
 }
 
 void DisplayView::showStartTimeEdit(
     const core::StartTimeEditDisplayModel& model) {
   char value[12];
-  std::snprintf(value, sizeof(value), "%02u:%02u:00",
-                model.proposedClockTime.hour, model.proposedClockTime.minute);
+  char current[20];
+  std::snprintf(value, sizeof(value), "%02u:%02u:%02u",
+                model.proposedClockTime.hour, model.proposedClockTime.minute,
+                model.proposedClockTime.second);
+  std::snprintf(current, sizeof(current), "KELLO %02u:%02u:%02u",
+                model.currentClockTime.hour, model.currentClockTime.minute,
+                model.currentClockTime.second);
   canvas_.setTextDatum(TC_DATUM);
   canvas_.setTextColor(textColor_, DISPLAY_BACKGROUND_COLOR);
   canvas_.drawString("SEURAAVA LAHTO", BoardConfig::DISPLAY_WIDTH / 2, 10, 2);
@@ -599,6 +643,9 @@ void DisplayView::showStartTimeEdit(
                                           : DISPLAY_BACKGROUND_COLOR,
                        DISPLAY_BACKGROUND_COLOR);
   canvas_.drawString(value, BoardConfig::DISPLAY_WIDTH / 2, 75, 2);
+  canvas_.setTextSize(1);
+  canvas_.setTextColor(textColor_, DISPLAY_BACKGROUND_COLOR);
+  canvas_.drawString(current, BoardConfig::DISPLAY_WIDTH / 2, 118, 2);
   drawFooter("", "YLOS/ALAS: +/-1 MIN",
              model.acceptsWithPoint ? "PISTE: HYVAKSY" : "OIKEA: HYVAKSY",
              textColor_);
@@ -662,8 +709,10 @@ void DisplayView::showBasicView(const core::DisplayModel& model) {
   std::snprintf(clockText, sizeof(clockText), "%02u:%02u:%02u",
                 model.clock.hour, model.clock.minute, model.clock.second);
   std::snprintf(speedText, sizeof(speedText), "%.0f km/h", model.speedKmh);
-  formatTrip(trip1Text, sizeof(trip1Text), model.trip1.distanceMillimeters, model.tripTenMeterPrecision);
-  formatTrip(trip2Text, sizeof(trip2Text), model.trip2.distanceMillimeters, model.tripTenMeterPrecision);
+  formatTrip(trip1Text, sizeof(trip1Text), model.trip1.distanceMillimeters,
+             model.tripTenMeterPrecision);
+  formatTrip(trip2Text, sizeof(trip2Text), model.trip2.distanceMillimeters,
+             model.tripTenMeterPrecision);
   formatDelta(deltaText, sizeof(deltaText), model.competition.deltaSeconds);
   std::snprintf(atText, sizeof(atText), "%02u:%02u:%02u",
                 model.atOverlay.clockTime.hour, model.atOverlay.clockTime.minute,
@@ -942,9 +991,10 @@ void DisplayView::showOrder(const core::OrderDisplayModel& model) {
       primary = value;
       break;
     case route::EditorPhase::CONTINUATION: {
-      static const char* ACTIONS[] = {"SEURAAVA", "JAT", "MAALI"};
-      title = "JATKOTOIMINTO";
-      primary = ACTIONS[editor.continuation];
+      static const char* ACTIONS[] = {"AIKA", "NOPEUS", "MITTIS", "MAALI",
+                                      "JAT"};
+      title = "SEURAAVA";
+      primary = ACTIONS[editor.continuation % 5];
       break;
     }
     case route::EditorPhase::JAT_TYPE:
@@ -961,26 +1011,26 @@ void DisplayView::showOrder(const core::OrderDisplayModel& model) {
       std::snprintf(value, sizeof(value), "%+d min", editor.jatOffsetMinutes);
       primary = value;
       break;
-    case route::EditorPhase::BROWSE:
+    case route::EditorPhase::STAGE_SELECT:
       title = "AJOMAARAYS";
-      if (model.showsStartTime) {
+      if (editor.selectedStage == 0) {
         std::snprintf(value, sizeof(value), "LAHTO %02u:%02u",
                       editor.startHour, editor.startMinute);
         primary = value;
-      } else if (model.hasSelectedSegment) {
+      } else {
+        std::snprintf(value, sizeof(value), "JAKSO [%u]",
+                      editor.selectedStage);
+        primary = value;
+      }
+      break;
+    case route::EditorPhase::BROWSE:
+      title = "JAKSO";
+      if (model.hasSelectedSegment) {
         const domain::SegmentDefinition& segment = model.selectedSegment;
-        char startPoint[8];
-        char endPoint[8];
+        char startPoint[8]{};
+        char endPoint[8]{};
         if (segment.startPointIndex == 0)
           std::snprintf(startPoint, sizeof(startPoint), "L");
-        else if (segment.segmentType == domain::SegmentType::MITTIS)
-          std::snprintf(value, sizeof(value), "%s-%s MITTIS %lum %lu:%02lu",
-                        startPoint, endPoint,
-                        static_cast<unsigned long>(segment.value),
-                        static_cast<unsigned long>(
-                            segment.mittisDurationSeconds / 60),
-                        static_cast<unsigned long>(
-                            segment.mittisDurationSeconds % 60));
         else
           std::snprintf(startPoint, sizeof(startPoint), "%u",
                         segment.startPointIndex);
@@ -994,7 +1044,15 @@ void DisplayView::showOrder(const core::OrderDisplayModel& model) {
                                : (segment.segmentType == domain::SegmentType::SPEED
                                       ? "NOPEUS"
                                       : "MITTIS");
-        if (segment.segmentType == domain::SegmentType::TIME)
+        if (segment.segmentType == domain::SegmentType::MITTIS)
+          std::snprintf(value, sizeof(value), "%s-%s MITTIS %lum %lu:%02lu",
+                        startPoint, endPoint,
+                        static_cast<unsigned long>(segment.value),
+                        static_cast<unsigned long>(
+                            segment.mittisDurationSeconds / 60),
+                        static_cast<unsigned long>(
+                            segment.mittisDurationSeconds % 60));
+        else if (segment.segmentType == domain::SegmentType::TIME)
           std::snprintf(value, sizeof(value), "%s-%s %s %lu:%02lu",
                         startPoint, endPoint, type,
                         static_cast<unsigned long>(segment.value / 60),
@@ -1033,6 +1091,9 @@ void DisplayView::showOrder(const core::OrderDisplayModel& model) {
   canvas_.setTextColor(textColor_, DISPLAY_BACKGROUND_COLOR);
   if (editor.saveFailed) {
     drawFooter("", "TALLENNUSVIRHE", "", textColor_);
+  } else if (editor.phase == route::EditorPhase::STAGE_SELECT) {
+    drawFooter("VASEN: PALAA", "YLOS/ALAS: VALITSE", "OIKEA: AVAA",
+               textColor_);
   } else if (editor.phase == route::EditorPhase::BROWSE) {
     drawFooter("VASEN: PALAA", "YLOS/ALAS: SELAA", "OIKEA: MUOKKAA",
                textColor_);
@@ -1045,7 +1106,7 @@ void DisplayView::showOrder(const core::OrderDisplayModel& model) {
 }
 
 void DisplayView::showPulseDiagnostics(const core::DisplayModel& model) {
-  const auto& d = model.pulseDiagnostics;
+  const input::PulseDiagnosticsSnapshot& diagnostics = model.pulseDiagnostics;
   const bool large = BoardConfig::DISPLAY_WIDTH >= 480;
   const int16_t step = large ? 25 : 14;
   int16_t y = large ? 32 : 18;
@@ -1054,22 +1115,55 @@ void DisplayView::showPulseDiagnostics(const core::DisplayModel& model) {
   canvas_.setTextColor(textColor_, DISPLAY_BACKGROUND_COLOR);
   canvas_.setTextSize(large ? 2 : 1);
   canvas_.drawString("PULSSIDIAGNOSTIIKKA", 4, 1, 1);
-  auto row = [&](const char* value) { canvas_.drawString(value, 4, y, 1); y += step; };
+  const auto row = [&](const char* value) {
+    canvas_.drawString(value, 4, y, 1);
+    y += step;
+  };
   std::snprintf(line, sizeof(line), "K %lu MIN %lu us GPIO%u %s",
-      (unsigned long)model.pulseDiagnosticCalibration,
-      (unsigned long)d.minimumIntervalUs, model.pulseDiagnosticPin,
-      model.pulseDiagnosticFalling ? "FALL" : "RISE"); row(line);
-  std::snprintf(line, sizeof(line), "HAVAITUT %lu", (unsigned long)d.observed); row(line);
-  std::snprintf(line, sizeof(line), "HYV %lu HYL %lu", (unsigned long)d.accepted, (unsigned long)d.rejected); row(line);
-  std::snprintf(line, sizeof(line), "VALITETYT %lu", (unsigned long)d.delivered); row(line);
-  std::snprintf(line, sizeof(line), "DT %lu EDGE %lu us", (unsigned long)d.acceptedIntervalUs, (unsigned long)d.observedIntervalUs); row(line);
-  std::snprintf(line, sizeof(line), "MIN %lu MAX %lu us", (unsigned long)d.minimumAcceptedUs, (unsigned long)d.maximumAcceptedUs); row(line);
-  std::snprintf(line, sizeof(line), "IKA %lu us HZ %.2f", (unsigned long)model.pulseDiagnosticAgeUs,
-      d.acceptedIntervalUs ? 1000000.0 / d.acceptedIntervalUs : 0.0); row(line);
-  std::snprintf(line, sizeof(line), "V %.2f OVF %u/%lu/%lu",
-      d.acceptedIntervalUs ? model.pulseDiagnosticCalibration * 3600.0 / d.acceptedIntervalUs : 0.0,
-      d.counterOverflow, (unsigned long)d.pendingOverflows, (unsigned long)d.lifetimeOverflows); row(line);
-  std::snprintf(line, sizeof(line), "HIST %u FREEZE %u AUTO %u", d.historySize, d.frozen, d.automaticTrigger); row(line);
+                static_cast<unsigned long>(model.pulseDiagnosticCalibration),
+                static_cast<unsigned long>(diagnostics.minimumIntervalUs),
+                model.pulseDiagnosticPin,
+                model.pulseDiagnosticFalling ? "FALL" : "RISE");
+  row(line);
+  std::snprintf(line, sizeof(line), "HAVAITUT %lu",
+                static_cast<unsigned long>(diagnostics.observed));
+  row(line);
+  std::snprintf(line, sizeof(line), "HYV %lu HYL %lu",
+                static_cast<unsigned long>(diagnostics.accepted),
+                static_cast<unsigned long>(diagnostics.rejected));
+  row(line);
+  std::snprintf(line, sizeof(line), "VALITETYT %lu",
+                static_cast<unsigned long>(diagnostics.delivered));
+  row(line);
+  std::snprintf(line, sizeof(line), "DT %lu EDGE %lu us",
+                static_cast<unsigned long>(diagnostics.acceptedIntervalUs),
+                static_cast<unsigned long>(diagnostics.observedIntervalUs));
+  row(line);
+  std::snprintf(line, sizeof(line), "MIN %lu MAX %lu us",
+                static_cast<unsigned long>(diagnostics.minimumAcceptedUs),
+                static_cast<unsigned long>(diagnostics.maximumAcceptedUs));
+  row(line);
+  std::snprintf(
+      line, sizeof(line), "IKA %lu us HZ %.2f",
+      static_cast<unsigned long>(model.pulseDiagnosticAgeUs),
+      diagnostics.acceptedIntervalUs
+          ? 1000000.0 / diagnostics.acceptedIntervalUs
+          : 0.0);
+  row(line);
+  std::snprintf(
+      line, sizeof(line), "V %.2f OVF %u/%lu/%lu",
+      diagnostics.acceptedIntervalUs
+          ? model.pulseDiagnosticCalibration * 3600.0 /
+                diagnostics.acceptedIntervalUs
+          : 0.0,
+      diagnostics.counterOverflow,
+      static_cast<unsigned long>(diagnostics.pendingOverflows),
+      static_cast<unsigned long>(diagnostics.lifetimeOverflows));
+  row(line);
+  std::snprintf(line, sizeof(line), "HIST %u FREEZE %u AUTO %u",
+                diagnostics.historySize, diagnostics.frozen,
+                diagnostics.automaticTrigger);
+  row(line);
   drawFooter("VASEN: PALAA", "ALAS: NOLLAA", "OIKEA: USB", textColor_);
 }
 
@@ -1131,7 +1225,7 @@ void DisplayView::showDiagnostics(
   std::snprintf(line, sizeof(line), "KULUNUT %" PRIu64 " ms",
                 model.clockElapsedMilliseconds);
   canvas_.drawString(line, 4, y, 1);
-  drawFooter("VASEN: PALAA", "", "OIKEA: PULSSIT", textColor_);
+  drawFooter("VASEN: PALAA", "", "", textColor_);
 }
 
 }  // namespace ui

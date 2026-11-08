@@ -15,6 +15,7 @@ enum class EditorPhase : uint8_t {
   CONTINUATION,
   JAT_TYPE,
   JAT_OFFSET,
+  STAGE_SELECT,
   BROWSE,
   CANCEL_PROMPT,
   SAVE_PENDING,
@@ -34,8 +35,11 @@ struct RouteOrderEditorView {
   bool enteringMittisTime;
   uint8_t digitCursor;
   uint8_t continuation;
+  bool mittisAvailable;
   domain::JatType jatType;
   int16_t jatOffsetMinutes;
+  uint16_t selectedStage;
+  uint16_t stageCount;
   uint16_t selectedSegment;
   uint16_t segmentCount;
 };
@@ -59,6 +63,10 @@ class RouteOrderEditor {
   void adjustValue(int8_t direction);
   uint8_t digitCount() const;
   bool canSelectMittis() const;
+  uint16_t stageCount() const;
+  uint16_t firstSegmentOfStage(uint16_t stageNumber) const;
+  uint16_t lastSegmentOfStage(uint16_t stageNumber) const;
+  void returnFromNewSegment();
 
   domain::RouteOrder draft_;
   domain::SegmentDefinition working_;
@@ -73,7 +81,13 @@ class RouteOrderEditor {
   uint8_t startTimeField_ = 0;
   uint8_t continuation_ = 0;
   uint8_t jatSelection_ = 0;
+  uint16_t selectedStage_ = 1;
   uint16_t selectedSegment_ = 0;
+  uint8_t originalStartHour_ = 0;
+  uint8_t originalStartMinute_ = 0;
+  bool editingStartTime_ = false;
+  bool newSegmentFromContinuation_ = false;
+  bool newSegmentAfterJat_ = false;
 };
 
 }  // namespace route

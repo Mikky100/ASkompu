@@ -27,6 +27,7 @@ enum class Screen : uint8_t {
   OrderEdit,
   Diagnostics,
   PulseDiagnostics,
+  TripResetNotice,
 };
 
 enum class TimeField : uint8_t { Hour, Minute };
@@ -68,6 +69,9 @@ struct AtOverlayDisplayModel {
 struct JatResultDisplayModel {
   domain::EventClockTime arrivalClockTime;
   int64_t finalDeltaSeconds;
+  domain::EventClockTime proposedStartClockTime;
+  ClockTime currentClockTime;
+  bool automaticStartAccepted;
 };
 
 struct FinishResultDisplayModel {
@@ -78,6 +82,7 @@ struct FinishResultDisplayModel {
 
 struct StartTimeEditDisplayModel {
   domain::EventClockTime proposedClockTime;
+  ClockTime currentClockTime;
   domain::JatType jatType;
   bool valueVisible;
   bool acceptsWithPoint;

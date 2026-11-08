@@ -58,8 +58,8 @@ RouteOrderValidationError validateRouteOrder(const RouteOrder& order) {
         return RouteOrderValidationError::INVALID_JAT;
       }
       const bool offsetRequired = segment.jatType == JatType::EMIT_JAT_OFFSET;
-      const bool offsetForbidden = segment.jatType == JatType::EMIT_MLA ||
-                                   segment.jatType == JatType::EMIT_ULA;
+      const bool offsetForbidden =
+          segment.jatType != JatType::EMIT_JAT_OFFSET;
       if ((offsetRequired && !segment.hasJatOffsetMinutes) ||
           (offsetForbidden && segment.hasJatOffsetMinutes)) {
         return RouteOrderValidationError::INVALID_JAT;

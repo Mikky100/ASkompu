@@ -1,10 +1,8 @@
 # ASkompu multi-board application shell
 
-Wikissä https://github.com/Mikky100/ASkompu/wiki kerrottu toiminta suomeksi AI:lle selittämiseksi ja käyttäjien/kehittäjien avuksi. 
-
-Current release: **0.1.1 (Verified prototype)**. Native tests, both firmware
-builds, ESP32-S3 ILI9488 installation and USB diagnostics are verified; see
-[verification details](docs/releases/0.1.1.md). It is not yet a production-ready
+Current release: **0.1.2 (prototype)**. This version continues from the latest
+conversation implementation and incorporates GitHub issues 6–11. ASkompu is a
+release for hardware and in-car evaluation. It is not yet a production-ready
 or safety-certified navigation instrument; see [CHANGELOG.md](CHANGELOG.md) for
 the implemented scope and known limitations.
 
@@ -19,10 +17,10 @@ TIME, SPEED and MITTIS calculation, start waiting, normal points, immediate
 point undo, JAT stages, finish, scoring, AT, additional orders and road breaks
 run in RAM. JAT supports `MANNED_JAT`, `EMIT_JAT_OFFSET`, `EMIT_MLA` and
 `EMIT_ULA`, including their start-time proposals and physical stage-distance
-zero points. At JAT the completed delta is stored for scoring while the active
-completed-stage accumulations reset. The new-stage delta follows the accepted
-start time; ULA/MLA adds the next interval's ideal time only when that start is
-reached. MITTIS calibration proposals use integer arithmetic and a changed
+zero points. At JAT the completed delta is stored for scoring. `EMIT_JAT_OFFSET`
+accepts the exact arrival time plus the route-order offset automatically,
+including seconds and midnight rollover; the other JAT types retain their
+documented edit/accept flow. MITTIS calibration proposals use integer arithmetic and a changed
 factor affects only future pulses.
 
 At the start of every MITTIS segment, Trip 1 resets. Its displayed value stays
@@ -31,11 +29,12 @@ continue accumulating normally; after the hold the current accumulated value
 is shown.
 
 Events are written in order to a hardware-independent RAM repository. The log
-contains point/undo, AT/cancel, JAT, finish, start-time, MITTIS, override,
+contains point/undo, AT, JAT, finish, start-time, MITTIS, override,
 reverse and trip-reset records. JAT and finish records carry their `StageResult`;
-totals use saturating arithmetic. Runtime events and in-progress competition
-state are intentionally not restored after power loss yet, and rapidly
-changing state is not written to NVS.
+totals use saturating arithmetic. A checksum-protected, route-bound NVS
+checkpoint restores the last accepted competition transition after a reboot.
+Pulses, trips and the RAM event history accumulated after that checkpoint are
+not crash-safe, and rapidly changing state is not written to NVS.
 
 ## Startup and software clock
 
@@ -89,8 +88,8 @@ Left returns, Right opens or accepts,
 and a long Left abandons the current non-startup UI operation and returns to the
 basic view.
 
-Button edges are captured by interrupts with 20 ms debounce. General buttons
-use a 150 ms accepted-press guard. Right uses a stricter 350 ms guard and its
+Button edges are captured by interrupts with 12 ms debounce. Right uses a
+180 ms accepted-press guard and its
 normal navigation action is dispatched only after a complete stable release,
 so one noisy physical press cannot advance two input fields. A dispatched UI
 event requests an immediate redraw instead of waiting for the periodic display
@@ -111,7 +110,7 @@ workflow; unavailable unrelated items remain visible but dimmed.
 | Pisteet ja tapahtumat | Jaksojen pisteet, Tapahtumat | Implemented from the current RAM event/result data; stage browsing also shows the total |
 | Näyttöasetukset | Kirkkaus, Tekstin väri, Näyttöselitteet | Persistent 10...100% PWM brightness, white/red/green text color, and label visibility are implemented |
 | Tripit | Nollaa Trip 1, Nollaa Trip 2, Ulkoinen trip | Both resets work; external display source needs its hardware/protocol adapter |
-| Järjestelmä | Diagnostiikka, Debug, Painikeasetukset, Muut asetukset | Diagnostics, pulse capture, persistent Debug speed and session-only power/display-off settings work; other system settings remain unavailable |
+| Järjestelmä | Diagnostiikka, Debug, Painikeasetukset, Muut asetukset | Diagnostics and persistent Debug speed work; button/system settings are not implemented |
 
 Calibration editing uses a draft value. Left cancels without changing the
 active value or requesting a write. Right accepts; an unchanged value requests
@@ -141,8 +140,9 @@ stop pulse processing.
 for `EI EMIT` (the default) or `EMIT`, locks that choice, asks for the
 competition start time, and then enters ordered TIME, SPEED, or MITTIS segments.
 After one MITTIS has been entered, later segment-type choices contain only TIME
-and SPEED. Each accepted TIME or SPEED value continues with `SEURAAVA`, `JAT`,
-or `MAALI`. TIME accepts 1...3599
+and SPEED. Each accepted value continues with the combined `AIKA`, `NOPEUS`,
+`MITTIS`, `MAALI` or `JAT` choice; `MITTIS` is skipped after it has been used.
+TIME accepts 1...3599
 seconds and SPEED a two-digit 1...99 km/h value. MITTIS accepts 1000...9999
 metres and then a TIME value for that same interval; SPEED is not available as
 the MITTIS interval's time rule. A finish is mandatory. Segment browsing starts
@@ -154,9 +154,11 @@ browsing labels the start point as `L` and the finish point as `M`, for example
 With an existing order, opening `AJOMAARAYS` defaults to `UUSI AJOMAARAYS`,
 including in `IDLE`. Up/Down toggles to `MUOKKAA AJOMAARAYS`, Right confirms
 the selected workflow, and Left returns to the menu without changing
-the order or competition state. Editing then browses segments with Up/Down,
-Right edits the selected segment, and Left returns or abandons the in-progress
-edit. Replacement starts a separate draft from the competition-type selection;
+the order or competition state. Editing opens at `JAKSO [1]`; Up from it exposes
+the competition-level `LAHTOAIKA`, and Down selects later stages. Right opens a
+stage, Up/Down browses only that stage's segments, and Down after the final
+segment returns to stage selection just like Left. Right edits the selected
+segment. Replacement starts a separate draft from the competition-type selection;
 the old long-Right replacement prompt is not used. Competition type is not part
 of ordinary editing. The UI term `EI EMIT` maps to the unchanged domain enum
 `CompetitionType::NON_EMIT`.
@@ -188,7 +190,7 @@ import adapter.
 - `src/input/` adapts active-low buttons, the reverse level, and
   interrupt-driven pulses. Button CHANGE interrupts timestamp edges into small
   per-button queues; debounce, short/long-press interpretation and application
-  calls stay outside the ISR. `ButtonInterpreter` and the 20 ms
+  calls stay outside the ISR. `ButtonInterpreter` and the 12 ms
   continuous-level `StableSignalFilter` are native-testable.
 - `src/ports/ArduinoClock.h` is the `millis()`/`micros()` adapter.
 - `include/board/` selects one GPIO/display profile from the PlatformIO build
@@ -242,7 +244,7 @@ display, NVS, or board. They cover clock validation/entry/acceptance, restart,
 minute/hour/day transitions, multi-day running and rollover; basic DisplayModel
 contents; menu opening, wrapping, clamping, scrolling, disabled items and
 return paths; clock editing; calibration cancel/accept/failure/write requests;
-diagnostics; independent trip resets; Point/AT timing and cancellation;
+diagnostics; independent trip resets; Point timing and AT display toggling;
 signed forward/reverse distance; MITTIS calibration; every JAT type and start
 proposal; scoring; runtime overrides; result/event browsing; reverse-level
 filtering; pulses in every relevant UI state; motion math, saturation, debounce,
@@ -336,14 +338,14 @@ by `TRIPIT > ULK.NOLLAUS`. The internal GPIO17 reset button uses the separately
 selected `SIS.NOLLAUS` target.
 The GPIO40 speed source is also active LOW: firmware counts its fast falling
 edge so the external pull-up/RC network's slower rising edge cannot create
-timing jitter.
-GPIO8 is the active-low light-switch input, disabled at every boot. The display
-starts lit. Enable it for the current session through
-`JARJESTELMA > PAINIKEASETUKSET > VIRTAPAINIKE`; its stable transitions control
-GPIO9 PWM. `SAMMUTA NAYTTO` works regardless of that setting. Any stable key
-or external reset wakes the display and retains its normal button action.
-Clock, pulses and competition continue while dark. This setting is not
-persisted. The input keeps its 20 ms stability filter.
+timing jitter. The current hardware assumption is a 220 ohm series resistor,
+4.7 kohm pull-up and the still-installed 330 nF capacitor; firmware does not
+assume the proposed 100 nF capacitor is already fitted.
+GPIO8 is the active-low light-switch input. Closing it to GND enables GPIO9
+PWM for both the display backlight and the keyboard-LED transistor described
+by the prototype wiring; opening it turns both light loads off while the ESP32,
+clock, pulses and competition calculation continue running. The input uses a
+20 ms stability filter in addition to the external pull-up/RC circuit.
 GPIO1, GPIO2, GPIO18, GPIO21 and GPIO38 are deliberately left free by this
 profile. GPIO19 and GPIO20 are reserved for native USB D-/D+;
 GPIO35-37 remain unavailable because of the N16R8 Octal PSRAM.
@@ -370,10 +372,9 @@ but normal firmware diagnostics are directed to native USB CDC.
 3. Confirm the module really contains an ILI9488 and verify 480x320 landscape
    orientation, RGB order, inversion and full-screen
    refresh without tearing or a persistent blank screen.
-4. Verify a lit display at boot with GPIO8 open or grounded. Enable
-   `VIRTAPAINIKE` in `PAINIKEASETUKSET` and check GPIO8 transitions, menu
-   display-off and wake with each key/external reset. Power cycle and verify
-   the power-button setting returns to off. Clock and pulses must continue.
+4. Verify that grounding GPIO8 enables GPIO9 PWM and opening GPIO8 disables
+   the display backlight and keyboard LEDs without stopping the clock or pulse
+   calculation.
 5. Exercise every top-row value and `-1234`, `0`, `+1234` delta values; confirm
    fixed positions, no clipping and no overlap at both short and long values.
 6. Verify TIME, SPEED, MITTIS, JAT, AT, finish, result, event, menu and editing
@@ -408,7 +409,9 @@ active-LOW input with a 20 ms stability filter; its stable value is sampled
 before each pulse batch. Point long-press starts at 1200 ms without repeat, and
 its release cannot also create a short point. Trip 1 reset and foot reset are
 not physically connected in this profile. RTC hardware, external trip display
-and persistent crash-safe runtime/event storage remain unavailable. Trip 1 is
+and fully persistent crash-safe event storage remain unavailable. A
+checksum-protected NVS checkpoint preserves route-bound competition progress at
+accepted transitions without writing on every loop or pulse. Trip 1 is
 reset automatically at every JAT and again at the accepted MLA/ULA physical
 start point. Trip 2 is never reset by JAT automation.
 
@@ -449,54 +452,14 @@ start point. Trip 2 is never reset by JAT automation.
     than 1200 ms opens `LISAMAARAYS` / `TIEKATKO` without creating a point.
 15. Drive a MITTIS interval, verify the old/new factor prompt, reject once,
     accept once, power-cycle, and confirm only the accepted factor persists.
-16. Verify AT shows the press time, a second AT within three seconds cancels it,
-    and the overlay disappears only after one second at at most 3.6 km/h plus
-    the configured absolute travel distance in either direction.
-17. Exercise every JAT type, including result timeout/Right skip, minute editing,
-    EMIT offset acceptance with Point, MLA/ULA distance exclusion and a start
-    time crossing midnight.
+16. Verify AT shows the press time, a second AT hides it without creating or
+    cancelling an event, a third AT shows a new time, and automatic hiding still
+    uses one second at at most 3.6 km/h plus the configured absolute distance.
+17. Exercise every JAT type, including result timeout/Right skip, current clock
+    beside the proposed departure, automatic EMIT+AIKA acceptance, MLA/ULA
+    distance exclusion and an automatic start crossing midnight.
 18. Open stage points, total points and event history; verify cancelled events
     are marked and finish keeps the current frozen clock/delta presentation.
 
-Firmware upload and serial-port testing require a selected device and user
-authorization; they are separate from the native tests.
-
-
-## Issues #6–#9 (6 November 2026)
-
-- JAT+ULA/MLA includes the next interval's ideal time only at its accepted start,
-  once. Arrival 11:23:34, start 11:25 and TIME 5:00 targets 11:30.
-- The display starts lit; session-only power and menu display-off/wake behavior
-  is described above.
-- Both internal trips share >31 / <29 km/h hysteresis with a continuous 1500 ms
-  dwell. Existing pulse-derived speed/zero timeout is used without a new speed
-  filter. Below 10 km, coarse mode truncates to 10 m with three decimal places
-  (2.343 -> 2.340); 10 km and above retain two decimals. Distances and competition
-  calculations keep full precision.
-- `JARJESTELMA > DIAGNOSTIIKKA > Right` opens pulse diagnostics. Down resets
-  only diagnostics; Right freezes and dumps a report over native USB at 115200.
-  Serial commands `p` (capture/report) and `r` (reset diagnostics) also work.
-  Reports include observed/accepted/rejected/delivered counts, both distinct
-  edge and accepted intervals, age, min/max, frequency/speed, GPIO/edge,
-  overflow flags and history retention counters.
-- The fixed 32-edge history freezes on the first >=1.8x accepted interval or a
-  manual capture. It retains preceding samples. Reset rearms it. Counters keep
-  running while frozen; overwritten history and samples omitted after freeze
-  are reported separately. USB sends at most 64 bytes per loop when room is
-  available. No printing, allocation or NVS writes occur in the ISR.
-- Observed means ISR-observed edges, not every physical sensor pulse. A long
-  interval is a diagnostic hint and can also mean actual deceleration. Once
-  input stops and pending pulses drain, accepted and delivered should match
-  unless an overflow is reported. Reset atomically drains the old pending batch
-  to normal distance processing, excluding that batch from the new diagnostic
-  period; filter state, trips, calibration and competition are preserved.
-- Timestamps/intervals use unsigned microsecond differences across rollover.
-  A single interval/age >=2^32 us (~71.6 min) is ambiguous. Counters saturate
-  with explicit overflow reporting. Capture is RAM-only; save the USB report
-  before reset or loss of power.
-
-Native regression tests include 10,000 accepted pulses at 212 mm/pulse at
-20, 94.34, 166.67 and 262.05 Hz, with model/diagnostic reads and rejected short
-edges: exactly 2,120,000 mm per trip. Physical generator testing during SPI
-updates and USB output, car readability, and physical switch/wake verification
-remain necessary; native tests cannot verify signals that never reach the ISR.
+Firmware upload and serial-port testing are intentionally outside the automated
+workflow.

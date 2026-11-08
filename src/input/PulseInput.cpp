@@ -34,20 +34,24 @@ void PulseInput::recordDelivered(uint32_t count) {
   diagnostics_.delivered(count);
   portEXIT_CRITICAL(&mux_);
 }
+
 PulseDiagnosticsSnapshot PulseInput::diagnostics() {
   portENTER_CRITICAL(&mux_);
-  const auto result = diagnostics_.snapshot(minimumPulseIntervalUs_);
+  const PulseDiagnosticsSnapshot result =
+      diagnostics_.snapshot(minimumPulseIntervalUs_);
   portEXIT_CRITICAL(&mux_);
   return result;
 }
+
 void PulseInput::freezeDiagnostics() {
   portENTER_CRITICAL(&mux_);
   diagnostics_.freeze();
   portEXIT_CRITICAL(&mux_);
 }
+
 PulseTrace PulseInput::trace(uint8_t index) {
   portENTER_CRITICAL(&mux_);
-  const auto result = diagnostics_.trace(index);
+  const PulseTrace result = diagnostics_.trace(index);
   portEXIT_CRITICAL(&mux_);
   return result;
 }
@@ -61,18 +65,24 @@ void IRAM_ATTR PulseInput::onPulse() {
 
   portENTER_CRITICAL_ISR(&mux_);
   const bool accepted = acceptsPulseInterval(timestampUs, lastPulseAtUs_,
-                            minimumPulseIntervalUs_, hasAcceptedPulse_);
-  diagnostics_.observe(timestampUs, accepted, hasAcceptedPulse_, lastPulseAtUs_);
+                                              minimumPulseIntervalUs_,
+                                              hasAcceptedPulse_);
+  diagnostics_.observe(timestampUs, accepted, hasAcceptedPulse_,
+                       lastPulseAtUs_);
   if (!accepted) {
     portEXIT_CRITICAL_ISR(&mux_);
     return;
   }
   if (pendingPulses_ != UINT32_MAX) {
     ++pendingPulses_;
-  } else diagnostics_.pendingOverflow();
+  } else {
+    diagnostics_.pendingOverflow();
+  }
   if (totalPulses_ != UINT32_MAX) {
     ++totalPulses_;
-  } else diagnostics_.lifetimeOverflow();
+  } else {
+    diagnostics_.lifetimeOverflow();
+  }
   previousPulseAtUs_ = lastPulseAtUs_;
   lastPulseAtUs_ = timestampUs;
   hasAcceptedPulse_ = true;

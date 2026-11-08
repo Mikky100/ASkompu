@@ -10,13 +10,16 @@
 #include "domain/CalibrationSetting.h"
 #include "domain/MotionMath.h"
 #include "domain/SpeedCalculator.h"
+#include "domain/TripPrecision.h"
 #include "domain/TripCounter.h"
 #include "input/ButtonInterpreter.h"
+#include "input/PulseDiagnostics.h"
 #include "input/PulseFilter.h"
 #include "route/RouteOrderCodec.h"
 #include "route/RouteOrderEditor.h"
 #include "route/RouteOrderStore.h"
 #include "ui/RouteOrderFormatting.h"
+#include "ui/TripFormatting.h"
 
 void setUp() {}
 void tearDown() {}
@@ -146,6 +149,7 @@ void createOneSecondOrder(route::RouteOrderEditor& editor,
   editor.handle(route::EditorKey::UP);     // 0:01
   editor.handle(route::EditorKey::RIGHT);  // continuation
   editor.handle(route::EditorKey::DOWN);
+  editor.handle(route::EditorKey::DOWN);
   editor.handle(route::EditorKey::DOWN);   // finish
 }
 
@@ -257,7 +261,7 @@ void testJatValidationByCompetitionType() {
       static_cast<uint8_t>(domain::validateRouteOrder(order)));
 }
 
-void testNonEmitJatSkipsOnlyChoiceAndReturnsToContinuation() {
+void testNonEmitJatNeedsNoOffsetAndBackReturnsToContinuation() {
   route::RouteOrderEditor editor;
   editor.beginCreate();
   editor.handle(route::EditorKey::RIGHT);  // NON-EMIT
@@ -269,14 +273,20 @@ void testNonEmitJatSkipsOnlyChoiceAndReturnsToContinuation() {
   editor.handle(route::EditorKey::RIGHT);
   editor.handle(route::EditorKey::UP);     // 00:01
   editor.handle(route::EditorKey::RIGHT);  // continuation
+  editor.handle(route::EditorKey::DOWN);
+  editor.handle(route::EditorKey::DOWN);
+  editor.handle(route::EditorKey::DOWN);
   editor.handle(route::EditorKey::DOWN);   // JAT
   editor.handle(route::EditorKey::RIGHT);
 
   TEST_ASSERT_EQUAL_UINT8(
-      static_cast<uint8_t>(route::EditorPhase::JAT_OFFSET),
+      static_cast<uint8_t>(route::EditorPhase::SEGMENT_TYPE),
       static_cast<uint8_t>(editor.view().phase));
-  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(domain::JatType::MANNED_JAT),
-                          static_cast<uint8_t>(editor.view().jatType));
+  TEST_ASSERT_EQUAL_size_t(1, editor.draft().segments.size());
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(domain::JatType::MANNED_JAT),
+      static_cast<uint8_t>(editor.draft().segments[0].jatType));
+  TEST_ASSERT_FALSE(editor.draft().segments[0].hasJatOffsetMinutes);
 
   editor.handle(route::EditorKey::LEFT);
   TEST_ASSERT_EQUAL_UINT8(
@@ -344,6 +354,7 @@ void testMittisRangeAndForcedFollowingTimeSegment() {
   editor.handle(route::EditorKey::RIGHT);
   editor.handle(route::EditorKey::UP);     // 0:01
   editor.handle(route::EditorKey::RIGHT);  // continuation
+  editor.handle(route::EditorKey::DOWN);
   editor.handle(route::EditorKey::DOWN);
   editor.handle(route::EditorKey::DOWN);
   TEST_ASSERT_EQUAL_UINT8(
@@ -441,6 +452,7 @@ void testRightEditsSegmentLeftCancelsAndFailedSavePreservesCurrent() {
   press(fixture.application, core::ButtonId::Right);  // edit
   press(fixture.application, core::ButtonId::Down);
   press(fixture.application, core::ButtonId::Right);
+  press(fixture.application, core::ButtonId::Right);
   TEST_ASSERT_EQUAL_UINT8(
       static_cast<uint8_t>(route::EditorPhase::SEGMENT_TYPE),
       static_cast<uint8_t>(fixture.application.displayModel().order.editor.phase));
@@ -505,6 +517,7 @@ void testAccessPromptReplacementKeepsOldUntilSave() {
   press(fixture.application, core::ButtonId::Right);
   press(fixture.application, core::ButtonId::Up);
   press(fixture.application, core::ButtonId::Right);  // continuation
+  press(fixture.application, core::ButtonId::Down);
   press(fixture.application, core::ButtonId::Down);
   press(fixture.application, core::ButtonId::Down);
   press(fixture.application, core::ButtonId::Right);  // finish/save request
@@ -715,7 +728,7 @@ void testWikiMenuOpeningSemanticsAndReturn() {
   TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(core::Screen::BasicView),
                           static_cast<uint8_t>(fixture.application.screen()));
   press(fixture.application, core::ButtonId::Up);
-  TEST_ASSERT_EQUAL_UINT8(6, fixture.application.menuSelectedIndex());
+  TEST_ASSERT_EQUAL_UINT8(7, fixture.application.menuSelectedIndex());
 }
 
 void testMainMenuWrapsAndSubmenuClamps() {
@@ -723,7 +736,7 @@ void testMainMenuWrapsAndSubmenuClamps() {
   acceptStartupTime(fixture, 0, 0);
   openMainAt(fixture, 0);
   press(fixture.application, core::ButtonId::Up);
-  TEST_ASSERT_EQUAL_UINT8(6, fixture.application.menuSelectedIndex());
+  TEST_ASSERT_EQUAL_UINT8(7, fixture.application.menuSelectedIndex());
   press(fixture.application, core::ButtonId::Down);
   TEST_ASSERT_EQUAL_UINT8(0, fixture.application.menuSelectedIndex());
   press(fixture.application, core::ButtonId::Right);
@@ -741,8 +754,8 @@ void testLongMainMenuScrollKeepsSelectionVisible() {
   acceptStartupTime(fixture, 0, 0);
   press(fixture.application, core::ButtonId::Up);
   const core::MenuDisplayModel menu = fixture.application.displayModel().menu;
-  TEST_ASSERT_EQUAL_UINT8(6, menu.selectedIndex);
-  TEST_ASSERT_EQUAL_UINT8(7 - core::MENU_VISIBLE_ROWS, menu.scrollOffset);
+  TEST_ASSERT_EQUAL_UINT8(7, menu.selectedIndex);
+  TEST_ASSERT_EQUAL_UINT8(8 - core::MENU_VISIBLE_ROWS, menu.scrollOffset);
   TEST_ASSERT_TRUE(menu.selectedVisibleRow < menu.visibleRowCount);
 }
 
@@ -789,7 +802,7 @@ void testExistingOrderAccessPromptDefaultsToNewAndLeftPreservesOrder() {
       60, fixture.application.currentRouteOrder()->segments[0].value);
 }
 
-void testOrderBrowseShowsStartTimeBeforeSegments() {
+void testOrderEditStartsAtStageAndExposesStartTimeAboveIt() {
   Fixture fixture;
   domain::RouteOrder order = makeOrder(domain::CompetitionType::EMIT);
   order.startHour = 12;
@@ -800,12 +813,22 @@ void testOrderBrowseShowsStartTimeBeforeSegments() {
   press(fixture.application, core::ButtonId::Right);  // access prompt
   press(fixture.application, core::ButtonId::Down);   // edit
   press(fixture.application, core::ButtonId::Right);  // edit
-  TEST_ASSERT_TRUE(fixture.application.displayModel().order.showsStartTime);
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(route::EditorPhase::STAGE_SELECT),
+      static_cast<uint8_t>(
+          fixture.application.displayModel().order.editor.phase));
+  TEST_ASSERT_EQUAL_UINT16(
+      1, fixture.application.displayModel().order.editor.selectedStage);
+  TEST_ASSERT_FALSE(fixture.application.displayModel().order.showsStartTime);
   TEST_ASSERT_FALSE(
       fixture.application.displayModel().order.hasSelectedSegment);
-  press(fixture.application, core::ButtonId::Down);
-  TEST_ASSERT_FALSE(fixture.application.displayModel().order.showsStartTime);
-  TEST_ASSERT_TRUE(fixture.application.displayModel().order.hasSelectedSegment);
+  press(fixture.application, core::ButtonId::Up);
+  TEST_ASSERT_TRUE(fixture.application.displayModel().order.showsStartTime);
+  press(fixture.application, core::ButtonId::Right);
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(route::EditorPhase::START_TIME),
+      static_cast<uint8_t>(
+          fixture.application.displayModel().order.editor.phase));
 }
 
 void testPersistentTextColorSelectionRequest() {
@@ -978,7 +1001,7 @@ void testExistingMittisIsNotOfferedForAnotherSegment() {
 
   route::RouteOrderEditor editor;
   editor.beginBrowse(order);
-  editor.handle(route::EditorKey::DOWN);
+  editor.handle(route::EditorKey::RIGHT);
   editor.handle(route::EditorKey::DOWN);
   editor.handle(route::EditorKey::RIGHT);
   editor.handle(route::EditorKey::DOWN);
@@ -1053,6 +1076,13 @@ void testTripMenuActionsResetNamedTripOnly() {
   TEST_ASSERT_EQUAL_UINT64(0, fixture.application.trip1DistanceMillimeters());
   TEST_ASSERT_EQUAL_UINT64(5000,
                            fixture.application.trip2DistanceMillimeters());
+  fixture.timeSource.advance(1000);
+  fixture.application.tick(1000000);
+  openMainAt(fixture, 5);
+  press(fixture.application, core::ButtonId::Right);
+  press(fixture.application, core::ButtonId::Down);
+  press(fixture.application, core::ButtonId::Down);
+  press(fixture.application, core::ButtonId::Down);
   press(fixture.application, core::ButtonId::Down);
   press(fixture.application, core::ButtonId::Right);
   TEST_ASSERT_EQUAL_UINT64(0, fixture.application.trip2DistanceMillimeters());
@@ -1075,6 +1105,85 @@ void testSparseAndDensePulseSpeeds() {
   assertSpeed(100, 10000, 36.0F);
   assertSpeed(100, 6000, 60.0F);
   assertSpeed(100, 3000, 120.0F);
+}
+
+void testContinuationIncludesMittisAndBackReturnsToCombinedChoice() {
+  route::RouteOrderEditor editor;
+  editor.beginCreate();
+  editor.handle(route::EditorKey::RIGHT);
+  editor.handle(route::EditorKey::RIGHT);
+  editor.handle(route::EditorKey::RIGHT);
+  editor.handle(route::EditorKey::RIGHT);  // TIME value
+  editor.handle(route::EditorKey::RIGHT);
+  editor.handle(route::EditorKey::RIGHT);
+  editor.handle(route::EditorKey::RIGHT);
+  editor.handle(route::EditorKey::UP);
+  editor.handle(route::EditorKey::RIGHT);  // combined next choice
+  TEST_ASSERT_TRUE(editor.view().mittisAvailable);
+  editor.handle(route::EditorKey::DOWN);
+  editor.handle(route::EditorKey::DOWN);
+  TEST_ASSERT_EQUAL_UINT8(2, editor.view().continuation);
+  editor.handle(route::EditorKey::RIGHT);  // MITTIS distance
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(route::EditorPhase::VALUE),
+                          static_cast<uint8_t>(editor.view().phase));
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(domain::SegmentType::MITTIS),
+                          static_cast<uint8_t>(editor.view().segmentType));
+  editor.handle(route::EditorKey::LEFT);
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(route::EditorPhase::CONTINUATION),
+      static_cast<uint8_t>(editor.view().phase));
+  TEST_ASSERT_EQUAL_size_t(0, editor.draft().segments.size());
+}
+
+void testStageHierarchyStartTimeEditAndLastDownReturn() {
+  domain::RouteOrder order;
+  order.competitionType = domain::CompetitionType::NON_EMIT;
+  order.startHour = 12;
+  order.startMinute = 34;
+  for (uint16_t index = 0; index < 3; ++index) {
+    domain::SegmentDefinition segment;
+    segment.segmentIndex = index;
+    segment.startPointIndex = index;
+    segment.endPointIndex = index + 1;
+    segment.value = 60;
+    segment.pointTypeAtEnd = index == 0 ? domain::PointType::JAT
+                                        : (index == 2
+                                               ? domain::PointType::FINISH_M
+                                               : domain::PointType::NORMAL);
+    if (index == 0) {
+      segment.hasJatType = true;
+      segment.jatType = domain::JatType::MANNED_JAT;
+    }
+    order.segments.push_back(segment);
+  }
+
+  route::RouteOrderEditor editor;
+  editor.beginBrowse(order);
+  TEST_ASSERT_EQUAL_UINT16(2, editor.view().stageCount);
+  TEST_ASSERT_EQUAL_UINT16(1, editor.view().selectedStage);
+  editor.handle(route::EditorKey::DOWN);
+  TEST_ASSERT_EQUAL_UINT16(2, editor.view().selectedStage);
+  editor.handle(route::EditorKey::RIGHT);
+  TEST_ASSERT_EQUAL_UINT16(2, editor.view().selectedSegment);
+  editor.handle(route::EditorKey::DOWN);
+  TEST_ASSERT_EQUAL_UINT16(3, editor.view().selectedSegment);
+  editor.handle(route::EditorKey::DOWN);
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(route::EditorPhase::STAGE_SELECT),
+      static_cast<uint8_t>(editor.view().phase));
+
+  editor.handle(route::EditorKey::UP);
+  editor.handle(route::EditorKey::UP);  // LAHTOAIKA above JAKSO 1
+  TEST_ASSERT_EQUAL_UINT16(0, editor.view().selectedStage);
+  editor.handle(route::EditorKey::RIGHT);
+  editor.handle(route::EditorKey::UP);     // 13:34
+  editor.handle(route::EditorKey::RIGHT);  // minute
+  editor.handle(route::EditorKey::UP);     // 13:35
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(route::EditorResult::SAVE_REQUESTED),
+      static_cast<uint8_t>(editor.handle(route::EditorKey::RIGHT)));
+  TEST_ASSERT_EQUAL_UINT8(13, editor.draft().startHour);
+  TEST_ASSERT_EQUAL_UINT8(35, editor.draft().startMinute);
 }
 
 void testPulseFilterUsesCalibrationAndMaximumSpeed() {
@@ -1474,6 +1583,98 @@ void testConfiguredInternalAndBothExternalInputsResetSelectedTrips() {
   TEST_ASSERT_EQUAL_INT64(0, fixture.application.trip1DistanceMillimeters());
 }
 
+void testMainMenuShutdownIsFirstFromUpAndPowerButtonIsSessionOnly() {
+  Fixture fixture;
+  acceptStartupTime(fixture, 0, 0);
+
+  press(fixture.application, core::ButtonId::Up);
+  TEST_ASSERT_EQUAL_UINT8(7, fixture.application.menuSelectedIndex());
+  TEST_ASSERT_EQUAL_STRING(
+      "SAMMUTA NAYTTO",
+      fixture.application.displayModel().menu.rows[2].label);
+  press(fixture.application, core::ButtonId::Right);
+  TEST_ASSERT_FALSE(fixture.application.displayOn());
+
+  press(fixture.application, core::ButtonId::Up);
+  TEST_ASSERT_TRUE(fixture.application.displayOn());
+  press(fixture.application, core::ButtonId::Up);     // system
+  press(fixture.application, core::ButtonId::Right);
+  press(fixture.application, core::ButtonId::Down);
+  press(fixture.application, core::ButtonId::Down);
+  press(fixture.application, core::ButtonId::Right);  // button settings
+  TEST_ASSERT_EQUAL_STRING(
+      "VIRTAPAINIKE: POIS",
+      fixture.application.displayModel().menu.rows[0].label);
+  press(fixture.application, core::ButtonId::Right);
+  TEST_ASSERT_EQUAL_STRING(
+      "VIRTAPAINIKE: PAALLE",
+      fixture.application.displayModel().menu.rows[0].label);
+  fixture.application.handleLightSwitch(false);
+  TEST_ASSERT_FALSE(fixture.application.displayOn());
+
+  Fixture rebooted;
+  TEST_ASSERT_TRUE(rebooted.application.displayOn());
+  rebooted.application.handleLightSwitch(false);
+  TEST_ASSERT_TRUE(rebooted.application.displayOn());
+}
+
+void testTripPrecisionFormattingAndPulseDiagnosticsRegressions() {
+  domain::TripPrecision precision;
+  precision.update(32.0F, 0);
+  precision.update(32.0F, 1499);
+  TEST_ASSERT_FALSE(precision.tenMeters());
+  precision.update(32.0F, 1500);
+  TEST_ASSERT_TRUE(precision.tenMeters());
+  precision.update(28.0F, 2000);
+  precision.update(28.0F, 3499);
+  TEST_ASSERT_TRUE(precision.tenMeters());
+  precision.update(28.0F, 3500);
+  TEST_ASSERT_FALSE(precision.tenMeters());
+
+  char trip[24]{};
+  ui::formatTrip(trip, sizeof(trip), 2343000, false);
+  TEST_ASSERT_EQUAL_STRING("2.343", trip);
+  ui::formatTrip(trip, sizeof(trip), 2343000, true);
+  TEST_ASSERT_EQUAL_STRING("2.340", trip);
+
+  input::PulseDiagnostics diagnostics;
+  diagnostics.observe(10000, true, false, 0);
+  diagnostics.delivered(1);
+  diagnostics.observe(11000, false, true, 10000);
+  diagnostics.observe(20000, true, true, 10000);
+  diagnostics.delivered(1);
+  const input::PulseDiagnosticsSnapshot snapshot = diagnostics.snapshot(3816);
+  TEST_ASSERT_EQUAL_UINT32(3, snapshot.observed);
+  TEST_ASSERT_EQUAL_UINT32(2, snapshot.accepted);
+  TEST_ASSERT_EQUAL_UINT32(1, snapshot.rejected);
+  TEST_ASSERT_EQUAL_UINT32(2, snapshot.delivered);
+  TEST_ASSERT_EQUAL_UINT32(10000, snapshot.acceptedIntervalUs);
+  diagnostics.reset();
+  TEST_ASSERT_EQUAL_UINT32(0, diagnostics.snapshot(3816).observed);
+}
+
+void testCombinedNextChoiceWrapsInRequiredOrder() {
+  route::RouteOrderEditor editor;
+  editor.beginCreate();
+  editor.handle(route::EditorKey::RIGHT);  // competition type
+  editor.handle(route::EditorKey::RIGHT);  // hour -> minute
+  editor.handle(route::EditorKey::RIGHT);  // start time
+  editor.handle(route::EditorKey::RIGHT);  // TIME value
+  editor.handle(route::EditorKey::RIGHT);
+  editor.handle(route::EditorKey::RIGHT);
+  editor.handle(route::EditorKey::RIGHT);
+  editor.handle(route::EditorKey::UP);     // 00:01
+  editor.handle(route::EditorKey::RIGHT);  // combined choice, default AIKA
+  TEST_ASSERT_EQUAL_UINT8(0, editor.view().continuation);
+  editor.handle(route::EditorKey::DOWN);
+  TEST_ASSERT_EQUAL_UINT8(1, editor.view().continuation);  // NOPEUS
+  editor.handle(route::EditorKey::UP);
+  editor.handle(route::EditorKey::UP);
+  TEST_ASSERT_EQUAL_UINT8(4, editor.view().continuation);  // JAT
+  editor.handle(route::EditorKey::UP);
+  TEST_ASSERT_EQUAL_UINT8(3, editor.view().continuation);  // MAALI
+}
+
 }  // namespace
 
 int main(int, char**) {
@@ -1482,8 +1683,10 @@ int main(int, char**) {
   RUN_TEST(testCompetitionTypeIsImmutableAfterSelectionAndDuringEdit);
   RUN_TEST(testRouteOrderValidationOrderValuesAndFinish);
   RUN_TEST(testJatValidationByCompetitionType);
-  RUN_TEST(testNonEmitJatSkipsOnlyChoiceAndReturnsToContinuation);
+  RUN_TEST(testNonEmitJatNeedsNoOffsetAndBackReturnsToContinuation);
   RUN_TEST(testMittisRangeAndForcedFollowingTimeSegment);
+  RUN_TEST(testContinuationIncludesMittisAndBackReturnsToCombinedChoice);
+  RUN_TEST(testStageHierarchyStartTimeEditAndLastDownReturn);
   RUN_TEST(testEditableRouteOrderValueFormattingKeepsValueKindsSeparate);
   RUN_TEST(testDriveSegmentFormattingUsesRoutePointNamesAndLabels);
   RUN_TEST(testCreationCancelAndValidationFailurePreserveCurrentOrder);
@@ -1505,7 +1708,7 @@ int main(int, char**) {
   RUN_TEST(testLongMainMenuScrollKeepsSelectionVisible);
   RUN_TEST(testOrderMenuStartsUnifiedCreation);
   RUN_TEST(testExistingOrderAccessPromptDefaultsToNewAndLeftPreservesOrder);
-  RUN_TEST(testOrderBrowseShowsStartTimeBeforeSegments);
+  RUN_TEST(testOrderEditStartsAtStageAndExposesStartTimeAboveIt);
   RUN_TEST(testPersistentTextColorSelectionRequest);
   RUN_TEST(testMenuTimeEditCancelAndAccept);
   RUN_TEST(testClockAndPulsesContinueInMenuAndDiagnostics);
@@ -1538,5 +1741,8 @@ int main(int, char**) {
   RUN_TEST(testDisplayBrightnessAndLabelsAreEditedThenAccepted);
   RUN_TEST(testMenuFontSizeAndTripSelectionsArePersistentSettings);
   RUN_TEST(testConfiguredInternalAndBothExternalInputsResetSelectedTrips);
+  RUN_TEST(testMainMenuShutdownIsFirstFromUpAndPowerButtonIsSessionOnly);
+  RUN_TEST(testTripPrecisionFormattingAndPulseDiagnosticsRegressions);
+  RUN_TEST(testCombinedNextChoiceWrapsInRequiredOrder);
   return UNITY_END();
 }

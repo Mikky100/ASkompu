@@ -3,9 +3,9 @@
 #include <cstdint>
 
 #include "AppEvent.h"
-#include "domain/TripPrecision.h"
 #include "Clock.h"
 #include "DisplayModel.h"
+#include "domain/TripPrecision.h"
 #include "domain/SpeedCalculator.h"
 #include "domain/CompetitionEngine.h"
 #include "domain/RouteOrder.h"
@@ -45,15 +45,21 @@ class ApplicationCore {
 
   DisplayModel displayModel() const;
   void setPulseDiagnostics(const input::PulseDiagnosticsSnapshot& value,
-      uint32_t ageUs, uint8_t pin, bool falling) {
-    pulseDiagnostics_ = value; pulseDiagnosticAgeUs_ = ageUs;
-    pulseDiagnosticPin_ = pin; pulseDiagnosticFalling_ = falling;
+                           uint32_t ageUs, uint8_t pin, bool falling) {
+    pulseDiagnostics_ = value;
+    pulseDiagnosticAgeUs_ = ageUs;
+    pulseDiagnosticPin_ = pin;
+    pulseDiagnosticFalling_ = falling;
   }
   bool takePulseDiagnosticsResetRequest() {
-    bool value = pulseDiagnosticsReset_; pulseDiagnosticsReset_ = false; return value;
+    const bool value = pulseDiagnosticsReset_;
+    pulseDiagnosticsReset_ = false;
+    return value;
   }
   bool takePulseDiagnosticsDumpRequest() {
-    bool value = pulseDiagnosticsDump_; pulseDiagnosticsDump_ = false; return value;
+    const bool value = pulseDiagnosticsDump_;
+    pulseDiagnosticsDump_ = false;
+    return value;
   }
   void handleLightSwitch(bool active) {
     if (powerButtonEnabled_) displayOn_ = active;
@@ -69,6 +75,12 @@ class ApplicationCore {
   void completeRouteOrderSave(bool succeeded);
   bool takeRouteOrderCompletionRequest();
   void completeRouteOrderCompletion(bool succeeded);
+  void setInitialCompetitionProgress(
+      const domain::CompetitionProgressSnapshot& snapshot);
+  bool takeCompetitionProgressSaveRequest(
+      domain::CompetitionProgressSnapshot& snapshot);
+  bool takeCompetitionProgressClearRequest();
+  bool takeCompetitionProgressRestoreResult(bool& restored);
   void setInitialTextColor(domain::TextColor color);
   void setCompetitionSettings(const domain::CompetitionSettings& settings);
   bool takeTextColorSaveRequest(domain::TextColor& color);
@@ -101,6 +113,18 @@ class ApplicationCore {
   }
 
  private:
+  input::PulseDiagnosticsSnapshot pulseDiagnostics_{};
+  uint32_t pulseDiagnosticAgeUs_ = 0;
+  uint8_t pulseDiagnosticPin_ = 0;
+  bool pulseDiagnosticFalling_ = true;
+  bool pulseDiagnosticsReset_ = false;
+  bool pulseDiagnosticsDump_ = false;
+  bool displayOn_ = true;
+  bool powerButtonEnabled_ = false;
+  domain::TripPrecision tripPrecision_;
+  uint32_t precisionLastUs_ = 0;
+  uint64_t precisionElapsedUs_ = 0;
+
   void handleTimeEntry(const ButtonEvent& event);
   void handleBasicView(const ButtonEvent& event);
   void handleTimeAdjustment(const ButtonEvent& event);
@@ -136,20 +160,11 @@ class ApplicationCore {
   uint64_t appendEvent(domain::EventRecord record);
   void handleAtRelease();
   void activateCurrentRouteOrder();
+  uint32_t currentRouteSignature() const;
   void updateMenuScroll();
   uint8_t menuItemCount() const;
   bool menuWraps() const;
 
-  input::PulseDiagnosticsSnapshot pulseDiagnostics_;
-  uint32_t pulseDiagnosticAgeUs_ = 0;
-  uint8_t pulseDiagnosticPin_ = 0;
-  bool pulseDiagnosticFalling_ = true;
-  bool pulseDiagnosticsReset_ = false, pulseDiagnosticsDump_ = false;
-  bool displayOn_ = true;
-  bool powerButtonEnabled_ = false;
-  domain::TripPrecision tripPrecision_;
-  uint32_t precisionLastUs_ = 0;
-  uint64_t precisionElapsedUs_ = 0;
   Clock& clock_;
   domain::SpeedCalculator speedCalculator_;
   domain::CompetitionEngine competition_;
@@ -192,6 +207,12 @@ class ApplicationCore {
   bool loadedRouteOrderActive_ = false;
   bool routeOrderCompletionPending_ = false;
   bool routeOrderCompletionInFlight_ = false;
+  bool competitionProgressSavePending_ = false;
+  bool competitionProgressClearPending_ = false;
+  bool hasLoadedCompetitionProgress_ = false;
+  bool competitionProgressRestoreResultPending_ = false;
+  bool competitionProgressRestoreSucceeded_ = false;
+  domain::CompetitionProgressSnapshot loadedCompetitionProgress_;
   bool finishResultDismissed_ = false;
   domain::RouteOrder currentRouteOrder_;
   route::RouteOrderEditor routeOrderEditor_;
@@ -216,9 +237,6 @@ class ApplicationCore {
   int32_t editedTimeAdjustmentSeconds_ = 0;
   bool atOverlayVisible_ = false;
   uint64_t lastPointEventId_ = 0;
-  uint64_t atEventId_ = 0;
-  bool atEventCancellable_ = false;
-  uint64_t atEventMonotonicMs_ = 0;
   domain::EventClockTime atClockTime_;
   bool atLowSpeedTiming_ = false;
   uint64_t atLowSpeedSinceMs_ = 0;
@@ -241,6 +259,8 @@ class ApplicationCore {
   uint32_t previousPulseAtUs_ = 0;
   uint32_t lastPulseAtUs_ = 0;
   uint32_t lastTickAtUs_ = 0;
+  uint64_t tripResetNoticeUntilMs_ = 0;
+  uint64_t jatResultScreenUntilMs_ = 0;
 };
 
 }  // namespace core

@@ -18,6 +18,7 @@ enum class CompetitionState : uint8_t {
 
 enum class PointResult : uint8_t {
   IGNORED,
+  START_ARMED,
   ADVANCED,
   FINISHED,
   JAT_COMPLETED,
@@ -41,8 +42,35 @@ struct PointUndoSnapshot {
   bool valid = false;
 };
 
-// Hardware-independent competition runtime. Persistent event logging and
-// crash-safe runtime restoration are intentionally outside this first phase.
+struct CompetitionProgressSnapshot {
+  uint16_t schemaVersion = 2;
+  uint32_t routeSignature = 0;
+  CompetitionState state = CompetitionState::IDLE;
+  uint16_t currentSegmentIndex = 0;
+  uint16_t stageIndex = 0;
+  int64_t idealBeforeSegmentMs = 0;
+  int64_t physicalDistanceMillimeters = 0;
+  int64_t stageDistanceMillimeters = 0;
+  int64_t segmentDistanceMillimeters = 0;
+  EventClockTime acceptedStartClockTime;
+  EventClockTime arrivalClockTime;
+  EventClockTime proposedStartClockTime;
+  int64_t finalDeltaMs = 0;
+  uint64_t completedStagePoints = 0;
+  JatType pendingJatType = JatType::MANNED_JAT;
+  int16_t pendingJatOffsetMinutes = 0;
+  bool stageDistanceEnabled = true;
+  bool firstSegmentArmed = false;
+  bool hasActiveOverride = false;
+  OverrideType activeOverrideType = OverrideType::ADDITIONAL_ORDER;
+  uint16_t overrideStartSegmentIndex = 0;
+  uint16_t overrideEndPointIndex = 0;
+  uint16_t overrideDurationSeconds = 0;
+  int64_t overrideIdealBeforeMs = 0;
+};
+
+// Hardware-independent competition runtime. The checkpoint snapshot is
+// persistence-agnostic; the ESP32 adapter decides when and where it is stored.
 class CompetitionEngine {
  public:
   static constexpr uint32_t POINT_UNDO_WINDOW_MS = 3000;
@@ -69,6 +97,10 @@ class CompetitionEngine {
                      SegmentOverride& accepted);
   bool applyTimeAdjustmentMilliseconds(int64_t adjustmentMs);
   bool undoPoint(uint64_t monotonicMs);
+  CompetitionProgressSnapshot progressSnapshot() const;
+  bool restoreProgress(const RouteOrder& order,
+                       const CompetitionProgressSnapshot& snapshot,
+                       uint32_t nowMillisecondsOfDay, uint64_t monotonicMs);
 
   CompetitionState state() const { return state_; }
   const RouteOrder* routeOrder() const { return active_ ? &order_ : nullptr; }
@@ -85,11 +117,12 @@ class CompetitionEngine {
   bool reverseActive() const { return reverseActive_; }
   void setReverseActive(bool active) { reverseActive_ = active; }
   bool deltaFrozen() const { return deltaFrozen_; }
+  bool firstSegmentPending() const { return !firstSegmentArmed_; }
   bool hasUndoPrompt(uint64_t monotonicMs) const;
   const MittisProposal& mittisProposal() const { return mittisProposal_; }
   uint16_t stageIndex() const { return stageIndex_; }
   const std::vector<StageResult>& stageResults() const { return stageResults_; }
-  uint64_t totalPoints() const { return totalStagePoints(stageResults_); }
+  uint64_t totalPoints() const;
   EventClockTime arrivalClockTime() const { return arrivalClockTime_; }
   int64_t finalDeltaMs() const { return finalDeltaMs_; }
   EventClockTime proposedStartClockTime() const {
@@ -136,6 +169,7 @@ class CompetitionEngine {
   JatType pendingJatType_ = JatType::MANNED_JAT;
   int16_t pendingJatOffsetMinutes_ = 0;
   bool stageDistanceEnabled_ = true;
+  bool firstSegmentArmed_ = false;
   bool correctingStartTime_ = false;
   int64_t acceptedStartTimelineMs_ = 0;
   EventClockTime acceptedStartClockTime_;
@@ -143,6 +177,7 @@ class CompetitionEngine {
   SegmentOverride activeOverride_;
   int64_t overrideIdealBeforeMs_ = 0;
   std::vector<StageResult> stageResults_;
+  uint64_t restoredStagePoints_ = 0;
   MittisProposal mittisProposal_;
   int64_t distanceWhileMittisPendingMm_ = 0;
   PointUndoSnapshot undo_;

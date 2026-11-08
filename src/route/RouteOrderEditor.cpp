@@ -29,17 +29,25 @@ void RouteOrderEditor::beginCreate() {
   enteringMittisTime_ = false;
   saveFailed_ = false;
   selectedSegment_ = 0;
+  selectedStage_ = 1;
   startTimeField_ = 0;
+  editingStartTime_ = false;
+  newSegmentFromContinuation_ = false;
+  newSegmentAfterJat_ = false;
 }
 
 void RouteOrderEditor::beginBrowse(const domain::RouteOrder& current) {
   draft_ = current;
-  phase_ = EditorPhase::BROWSE;
+  phase_ = EditorPhase::STAGE_SELECT;
   editingExisting_ = true;
   editingSegment_ = false;
   enteringMittisTime_ = false;
   saveFailed_ = false;
-  selectedSegment_ = 0;
+  selectedStage_ = 1;
+  selectedSegment_ = firstSegmentOfStage(selectedStage_) + 1;
+  editingStartTime_ = false;
+  newSegmentFromContinuation_ = false;
+  newSegmentAfterJat_ = false;
 }
 
 void RouteOrderEditor::beginNewSegment(domain::SegmentType type) {
@@ -54,6 +62,64 @@ void RouteOrderEditor::beginNewSegment(domain::SegmentType type) {
   continuation_ = 0;
   editingSegment_ = false;
   enteringMittisTime_ = false;
+}
+
+uint16_t RouteOrderEditor::stageCount() const {
+  uint16_t count = 1;
+  for (const domain::SegmentDefinition& segment : draft_.segments) {
+    if (segment.pointTypeAtEnd == domain::PointType::JAT && count < 0xFFFFU)
+      ++count;
+  }
+  return count;
+}
+
+uint16_t RouteOrderEditor::firstSegmentOfStage(uint16_t stageNumber) const {
+  if (stageNumber < 1) return 0;
+  uint16_t currentStage = 1;
+  for (uint16_t index = 0; index < draft_.segments.size(); ++index) {
+    if (currentStage == stageNumber) return index;
+    if (draft_.segments[index].pointTypeAtEnd == domain::PointType::JAT)
+      ++currentStage;
+  }
+  return static_cast<uint16_t>(draft_.segments.size());
+}
+
+uint16_t RouteOrderEditor::lastSegmentOfStage(uint16_t stageNumber) const {
+  const uint16_t first = firstSegmentOfStage(stageNumber);
+  for (uint16_t index = first; index < draft_.segments.size(); ++index) {
+    if (draft_.segments[index].pointTypeAtEnd == domain::PointType::JAT ||
+        draft_.segments[index].pointTypeAtEnd == domain::PointType::FINISH_M)
+      return index;
+  }
+  return draft_.segments.empty()
+             ? 0
+             : static_cast<uint16_t>(draft_.segments.size() - 1);
+}
+
+void RouteOrderEditor::returnFromNewSegment() {
+  if (draft_.segments.empty()) return;
+  working_ = draft_.segments.back();
+  draft_.segments.pop_back();
+  if (newSegmentFromContinuation_) {
+    phase_ = EditorPhase::CONTINUATION;
+  } else if (newSegmentAfterJat_) {
+    if (draft_.competitionType == domain::CompetitionType::NON_EMIT) {
+      phase_ = EditorPhase::CONTINUATION;
+      continuation_ = 4;
+    } else if (working_.hasJatOffsetMinutes) {
+      phase_ = EditorPhase::JAT_OFFSET;
+    } else {
+      phase_ = EditorPhase::JAT_TYPE;
+      if (working_.jatType == domain::JatType::EMIT_MLA)
+        jatSelection_ = 1;
+      else if (working_.jatType == domain::JatType::EMIT_ULA)
+        jatSelection_ = 2;
+      else
+        jatSelection_ = 0;
+    }
+  }
+  newSegmentFromContinuation_ = false;
+  newSegmentAfterJat_ = false;
 }
 
 void RouteOrderEditor::beginEditSelected() {
@@ -184,16 +250,25 @@ EditorResult RouteOrderEditor::finishWorkingSegment(
 }
 
 EditorResult RouteOrderEditor::acceptContinuation() {
-  if (continuation_ == 0) {
-    return finishWorkingSegment(domain::PointType::NORMAL);
+  if (continuation_ <= 2) {
+    if (continuation_ == 2 && !canSelectMittis()) return EditorResult::NONE;
+    working_.pointTypeAtEnd = domain::PointType::NORMAL;
+    working_.hasJatType = false;
+    working_.hasJatOffsetMinutes = false;
+    draft_.segments.push_back(working_);
+    beginNewSegment(static_cast<domain::SegmentType>(continuation_));
+    phase_ = EditorPhase::VALUE;
+    newSegmentFromContinuation_ = true;
+    return EditorResult::NONE;
   }
-  if (continuation_ == 1) {
+  if (continuation_ == 4) {
     if (draft_.competitionType == domain::CompetitionType::NON_EMIT) {
       working_.hasJatType = true;
       working_.jatType = domain::JatType::MANNED_JAT;
-      working_.hasJatOffsetMinutes = true;
-      phase_ = EditorPhase::JAT_OFFSET;
-      return EditorResult::NONE;
+      working_.hasJatOffsetMinutes = false;
+      const EditorResult result = finishWorkingSegment(domain::PointType::JAT);
+      newSegmentAfterJat_ = true;
+      return result;
     }
     jatSelection_ = 0;
     phase_ = EditorPhase::JAT_TYPE;
@@ -244,19 +319,58 @@ EditorResult RouteOrderEditor::handle(EditorKey key, bool longPress) {
     } else if (key == EditorKey::RIGHT) {
       if (startTimeField_ == 0)
         startTimeField_ = 1;
-      else
+      else if (editingStartTime_) {
+        if (domain::validateRouteOrder(draft_) !=
+            domain::RouteOrderValidationError::NONE)
+          return EditorResult::NONE;
+        phase_ = EditorPhase::SAVE_PENDING;
+        return EditorResult::SAVE_REQUESTED;
+      } else {
         beginNewSegment();
+      }
     } else if (key == EditorKey::LEFT && startTimeField_ == 1) {
       startTimeField_ = 0;
+    } else if (key == EditorKey::LEFT) {
+      if (editingStartTime_) {
+        draft_.startHour = originalStartHour_;
+        draft_.startMinute = originalStartMinute_;
+        editingStartTime_ = false;
+        phase_ = EditorPhase::STAGE_SELECT;
+      }
+    }
+    return EditorResult::NONE;
+  }
+  if (phase_ == EditorPhase::STAGE_SELECT) {
+    const uint16_t count = stageCount();
+    if (key == EditorKey::UP && selectedStage_ > 0) --selectedStage_;
+    if (key == EditorKey::DOWN && selectedStage_ < count) ++selectedStage_;
+    if (key == EditorKey::LEFT) return EditorResult::EXIT;
+    if (key == EditorKey::RIGHT) {
+      if (selectedStage_ == 0) {
+        editingStartTime_ = true;
+        originalStartHour_ = draft_.startHour;
+        originalStartMinute_ = draft_.startMinute;
+        startTimeField_ = 0;
+        phase_ = EditorPhase::START_TIME;
+      } else {
+        selectedSegment_ = firstSegmentOfStage(selectedStage_) + 1;
+        phase_ = EditorPhase::BROWSE;
+      }
     }
     return EditorResult::NONE;
   }
   if (phase_ == EditorPhase::BROWSE) {
-    if (key == EditorKey::UP && selectedSegment_ > 0) --selectedSegment_;
-    if (key == EditorKey::DOWN && selectedSegment_ < draft_.segments.size())
-      ++selectedSegment_;
+    const uint16_t first = firstSegmentOfStage(selectedStage_) + 1;
+    const uint16_t last = lastSegmentOfStage(selectedStage_) + 1;
+    if (key == EditorKey::UP && selectedSegment_ > first) --selectedSegment_;
+    if (key == EditorKey::DOWN) {
+      if (selectedSegment_ < last)
+        ++selectedSegment_;
+      else
+        phase_ = EditorPhase::STAGE_SELECT;
+    }
     if (key == EditorKey::RIGHT) beginEditSelected();
-    if (key == EditorKey::LEFT) return EditorResult::EXIT;
+    if (key == EditorKey::LEFT) phase_ = EditorPhase::STAGE_SELECT;
     return EditorResult::NONE;
   }
   if (phase_ == EditorPhase::SEGMENT_TYPE) {
@@ -277,6 +391,11 @@ EditorResult RouteOrderEditor::handle(EditorKey key, bool longPress) {
     } else if (key == EditorKey::LEFT) {
       if (editingSegment_) {
         phase_ = EditorPhase::BROWSE;
+      } else if (newSegmentAfterJat_) {
+        returnFromNewSegment();
+      } else if (draft_.segments.empty()) {
+        phase_ = EditorPhase::START_TIME;
+        startTimeField_ = 1;
       }
     }
     return EditorResult::NONE;
@@ -289,8 +408,11 @@ EditorResult RouteOrderEditor::handle(EditorKey key, bool longPress) {
       else if (enteringMittisTime_) {
         enteringMittisTime_ = false;
         digitCursor_ = 3;
-      } else
+      } else if (!editingSegment_ && newSegmentFromContinuation_) {
+        returnFromNewSegment();
+      } else {
         phase_ = EditorPhase::SEGMENT_TYPE;
+      }
     }
     if (key == EditorKey::RIGHT) {
       if (digitCursor_ + 1 < digitCount()) {
@@ -302,10 +424,13 @@ EditorResult RouteOrderEditor::handle(EditorKey key, bool longPress) {
     return EditorResult::NONE;
   }
   if (phase_ == EditorPhase::CONTINUATION) {
-    if (key == EditorKey::UP)
-      continuation_ = static_cast<uint8_t>((continuation_ + 2) % 3);
-    if (key == EditorKey::DOWN)
-      continuation_ = static_cast<uint8_t>((continuation_ + 1) % 3);
+    if (key == EditorKey::UP || key == EditorKey::DOWN) {
+      const uint8_t direction = key == EditorKey::UP ? 4 : 1;
+      do {
+        continuation_ =
+            static_cast<uint8_t>((continuation_ + direction) % 5);
+      } while (continuation_ == 2 && !canSelectMittis());
+    }
     if (key == EditorKey::LEFT) {
       phase_ = EditorPhase::VALUE;
       digitCursor_ = digitCount() - 1;
@@ -325,11 +450,15 @@ EditorResult RouteOrderEditor::handle(EditorKey key, bool longPress) {
       working_.jatType = draft_.competitionType == domain::CompetitionType::EMIT
                              ? emitJatType(jatSelection_)
                              : domain::JatType::MANNED_JAT;
-      const bool offset = working_.jatType == domain::JatType::MANNED_JAT ||
-                          working_.jatType == domain::JatType::EMIT_JAT_OFFSET;
+      const bool offset =
+          working_.jatType == domain::JatType::EMIT_JAT_OFFSET;
       working_.hasJatOffsetMinutes = offset;
       if (offset) phase_ = EditorPhase::JAT_OFFSET;
-      else return finishWorkingSegment(domain::PointType::JAT);
+      else {
+        const EditorResult result = finishWorkingSegment(domain::PointType::JAT);
+        newSegmentAfterJat_ = true;
+        return result;
+      }
     }
     return EditorResult::NONE;
   }
@@ -344,8 +473,11 @@ EditorResult RouteOrderEditor::handle(EditorKey key, bool longPress) {
       phase_ = draft_.competitionType == domain::CompetitionType::NON_EMIT
                    ? EditorPhase::CONTINUATION
                    : EditorPhase::JAT_TYPE;
-    if (key == EditorKey::RIGHT)
-      return finishWorkingSegment(domain::PointType::JAT);
+    if (key == EditorKey::RIGHT) {
+      const EditorResult result = finishWorkingSegment(domain::PointType::JAT);
+      newSegmentAfterJat_ = true;
+      return result;
+    }
   }
   return EditorResult::NONE;
 }
@@ -353,20 +485,29 @@ EditorResult RouteOrderEditor::handle(EditorKey key, bool longPress) {
 void RouteOrderEditor::completeSave(bool succeeded) {
   if (phase_ != EditorPhase::SAVE_PENDING) return;
   if (succeeded) {
-    editingExisting_ = true;
-    editingSegment_ = false;
-    phase_ = EditorPhase::BROWSE;
-    selectedSegment_ = 0;
+    if (editingExisting_) {
+      editingSegment_ = false;
+      editingStartTime_ = false;
+      phase_ = EditorPhase::STAGE_SELECT;
+    } else {
+      editingExisting_ = true;
+      editingSegment_ = false;
+      phase_ = EditorPhase::STAGE_SELECT;
+      selectedStage_ = 1;
+    }
   } else {
     saveFailed_ = true;
-    if (editingSegment_) {
+    if (editingStartTime_) {
+      phase_ = EditorPhase::START_TIME;
+      startTimeField_ = 1;
+    } else if (editingSegment_) {
       draft_.segments[selectedSegment_ - 1] = originalWorking_;
       phase_ = EditorPhase::VALUE;
       digitCursor_ = digitCount() - 1;
     } else {
       draft_.segments.pop_back();
       phase_ = EditorPhase::CONTINUATION;
-      continuation_ = 2;
+      continuation_ = 3;
     }
   }
 }
@@ -384,10 +525,13 @@ RouteOrderEditorView RouteOrderEditor::view() const {
           enteringMittisTime_,
           digitCursor_,
           continuation_,
+          canSelectMittis(),
           draft_.competitionType == domain::CompetitionType::EMIT
               ? emitJatType(jatSelection_)
               : domain::JatType::MANNED_JAT,
           working_.jatOffsetMinutes,
+          selectedStage_,
+          stageCount(),
           selectedSegment_,
           static_cast<uint16_t>(draft_.segments.size())};
 }

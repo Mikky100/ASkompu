@@ -12,6 +12,6 @@ constexpr uint32_t MILLIMETERS_PER_PULSE_STEP = 1;
 constexpr uint16_t SETTINGS_SCHEMA_VERSION = 3;
 
 constexpr uint32_t LONG_PRESS_DELAY_MS = 500;
-constexpr uint32_t REPEAT_INTERVAL_MS = 100;
+constexpr uint32_t REPEAT_INTERVAL_MS = 50;
 
 }  // namespace CalibrationConfig

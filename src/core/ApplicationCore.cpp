@@ -54,6 +54,7 @@ constexpr MenuItem MAIN_ITEMS[] = {
     {"NAYTTOASETUKSET", true},
     {"TRIPIT", true},
     {"JARJESTELMA", true},
+    {"SAMMUTA NAYTTO", true},
 };
 constexpr MenuItem RESULT_ITEMS[] = {{"JAKSOJEN PISTEET", true},
                                      {"TAPAHTUMAT", true}};
@@ -79,8 +80,7 @@ constexpr MenuItem SYSTEM_ITEMS[] = {{"DIAGNOSTIIKKA", true},
                                      {"DEBUG", true},
                                      {"PAINIKEASETUKSET", true},
                                      {"MUUT ASETUKSET", false}};
-constexpr MenuItem BUTTON_ITEMS[] = {{"VIRTAPAINIKE: POIS", true},
-                                     {"SAMMUTA NAYTTO", true}};
+constexpr MenuItem BUTTON_ITEMS[] = {{"VIRTAPAINIKE: POIS", true}};
 constexpr MenuItem DEBUG_ITEMS[] = {{"NOPEUS", true}};
 
 template <std::size_t N>
@@ -260,6 +260,10 @@ void ApplicationCore::handleButton(const ButtonEvent& event) {
                                    competitionSettings_);
     if (result != domain::PointResult::IGNORED)
       setManualSubtractActive(false);
+    if (result == domain::PointResult::START_ARMED) {
+      competitionProgressSavePending_ = true;
+      return;
+    }
     if (result == domain::PointResult::FINISHED) {
       domain::EventRecord record = makeEvent(domain::DomainEventType::FINISH);
       record.segmentIndex = endedSegment;
@@ -273,6 +277,7 @@ void ApplicationCore::handleButton(const ButtonEvent& event) {
       }
       appendEvent(record);
       routeOrderCompletionPending_ = true;
+      competitionProgressClearPending_ = true;
     } else if (result == domain::PointResult::MITTIS_PROPOSAL) {
       domain::EventRecord record =
           makeEvent(domain::DomainEventType::MITTIS_PROPOSED);
@@ -289,6 +294,7 @@ void ApplicationCore::handleButton(const ButtonEvent& event) {
       record.segmentIndex = endedSegment;
       lastPointEventId_ = appendEvent(record);
       updateMittisTripStart();
+      competitionProgressSavePending_ = true;
     } else if (result == domain::PointResult::JAT_COMPLETED) {
       domain::EventRecord record = makeEvent(domain::DomainEventType::JAT);
       record.segmentIndex = endedSegment;
@@ -304,8 +310,26 @@ void ApplicationCore::handleButton(const ButtonEvent& event) {
         record.payload.stageResult = results.back();
       }
       appendEvent(record);
+      if (competition_.pendingJatType() ==
+          domain::JatType::EMIT_JAT_OFFSET) {
+        domain::EventRecord accepted =
+            makeEvent(domain::DomainEventType::START_TIME_ACCEPTED);
+        accepted.payload.acceptedStartClockTime =
+            competition_.proposedStartClockTime();
+        appendEvent(accepted);
+      }
+      competitionProgressSavePending_ = true;
       resetTrip1();
-      if (competition_.state() == domain::CompetitionState::EDIT_START_TIME)
+      if (competition_.pendingJatType() ==
+          domain::JatType::EMIT_JAT_OFFSET) {
+        jatResultScreenUntilMs_ = clock_.elapsedSinceSetMilliseconds() +
+            static_cast<uint64_t>(competitionSettings_.jatResultSeconds) *
+                1000ULL;
+        screen_ = competitionSettings_.jatResultSeconds == 0
+                      ? Screen::BasicView
+                      : Screen::JatResult;
+      } else if (competition_.state() ==
+                 domain::CompetitionState::EDIT_START_TIME)
         beginJatStartTimeEdit();
       else
         screen_ = Screen::JatResult;
@@ -336,6 +360,7 @@ void ApplicationCore::handleButton(const ButtonEvent& event) {
     domain::EventRecord undo = makeEvent(domain::DomainEventType::POINT_UNDO);
     undo.payload.referencedEventId = lastPointEventId_;
     appendEvent(undo);
+    competitionProgressSavePending_ = true;
     return;
   }
   if (event.buttonId == ButtonId::Left &&
@@ -413,18 +438,24 @@ void ApplicationCore::handleButton(const ButtonEvent& event) {
       break;
     case Screen::PulseDiagnostics:
       if (event.eventType == ButtonEventType::Press) {
-        if (event.buttonId == ButtonId::Left) screen_ = Screen::Diagnostics;
-        if (event.buttonId == ButtonId::Down) pulseDiagnosticsReset_ = true;
-        if (event.buttonId == ButtonId::Right) pulseDiagnosticsDump_ = true;
+        if (event.buttonId == ButtonId::Left)
+          screen_ = Screen::Diagnostics;
+        else if (event.buttonId == ButtonId::Down)
+          pulseDiagnosticsReset_ = true;
+        else if (event.buttonId == ButtonId::Right)
+          pulseDiagnosticsDump_ = true;
       }
       break;
     case Screen::Diagnostics:
       if (event.eventType == ButtonEventType::Press &&
-          event.buttonId == ButtonId::Right) screen_ = Screen::PulseDiagnostics;
+          event.buttonId == ButtonId::Right)
+        screen_ = Screen::PulseDiagnostics;
       if (event.eventType == ButtonEventType::Press &&
           event.buttonId == ButtonId::Left) {
         openSubmenu(MenuPage::System);
       }
+      break;
+    case Screen::TripResetNotice:
       break;
   }
 }
@@ -565,12 +596,18 @@ void ApplicationCore::acceptOverride() {
   record.payload.hasOverride = true;
   record.payload.segmentOverride = accepted;
   appendEvent(record);
+  competitionProgressSavePending_ = true;
   screen_ = Screen::BasicView;
 }
 
 void ApplicationCore::handleJatResult(const ButtonEvent& event) {
   if (event.eventType == ButtonEventType::Press &&
       event.buttonId == ButtonId::Right) {
+    if (competition_.pendingJatType() ==
+        domain::JatType::EMIT_JAT_OFFSET) {
+      screen_ = Screen::BasicView;
+      return;
+    }
     competition_.dismissJatResult(clock_.elapsedSinceSetMilliseconds());
     beginJatStartTimeEdit();
   }
@@ -637,6 +674,7 @@ void ApplicationCore::acceptJatStartTime() {
           editedStageStartTime_, millisecondsOfDay(now),
           clock_.elapsedSinceSetMilliseconds()))
     return;
+  competitionProgressSavePending_ = true;
   domain::EventRecord accepted = makeEvent(
       startTimeCorrection_ ? domain::DomainEventType::START_TIME_CORRECTED
                            : domain::DomainEventType::START_TIME_ACCEPTED);
@@ -675,6 +713,7 @@ void ApplicationCore::completeMittisPoint(domain::PointResult result,
         makeEvent(domain::DomainEventType::NORMAL_POINT);
     point.segmentIndex = endedSegment;
     lastPointEventId_ = appendEvent(point);
+    competitionProgressSavePending_ = true;
     screen_ = Screen::BasicView;
     return;
   }
@@ -700,10 +739,28 @@ void ApplicationCore::completeMittisPoint(domain::PointResult result,
     appendEvent(record);
     if (finish) {
       routeOrderCompletionPending_ = true;
+      competitionProgressClearPending_ = true;
       screen_ = Screen::BasicView;
     } else {
+      if (competition_.pendingJatType() ==
+          domain::JatType::EMIT_JAT_OFFSET) {
+        domain::EventRecord accepted =
+            makeEvent(domain::DomainEventType::START_TIME_ACCEPTED);
+        accepted.payload.acceptedStartClockTime =
+            competition_.proposedStartClockTime();
+        appendEvent(accepted);
+      }
+      competitionProgressSavePending_ = true;
       resetTrip1();
-      if (competition_.state() ==
+      if (competition_.pendingJatType() ==
+          domain::JatType::EMIT_JAT_OFFSET) {
+        jatResultScreenUntilMs_ = clock_.elapsedSinceSetMilliseconds() +
+            static_cast<uint64_t>(competitionSettings_.jatResultSeconds) *
+                1000ULL;
+        screen_ = competitionSettings_.jatResultSeconds == 0
+                      ? Screen::BasicView
+                      : Screen::JatResult;
+      } else if (competition_.state() ==
           domain::CompetitionState::EDIT_START_TIME)
         beginJatStartTimeEdit();
       else
@@ -736,7 +793,12 @@ void ApplicationCore::handleTimeEntry(const ButtonEvent& event) {
       clock_.set(editedHour_, editedMinute_, 0);
       if (startupTimeEdit_) {
         activateCurrentRouteOrder();
-        screen_ = Screen::BasicView;
+        if (competition_.state() == domain::CompetitionState::EDIT_START_TIME)
+          beginJatStartTimeEdit();
+        else if (competition_.state() == domain::CompetitionState::JAT_RESULT)
+          screen_ = Screen::JatResult;
+        else
+          screen_ = Screen::BasicView;
       } else {
         openMainMenu(1);
       }
@@ -844,6 +906,7 @@ void ApplicationCore::handleTimeAdjustment(const ButtonEvent& event) {
           makeEvent(domain::DomainEventType::TIME_ADJUSTMENT);
       record.payload.timeAdjustmentSeconds = editedTimeAdjustmentSeconds_;
       appendEvent(record);
+      competitionProgressSavePending_ = true;
     }
     editedTimeAdjustmentSeconds_ = 0;
     timeAdjustmentEditing_ = false;
@@ -1156,12 +1219,16 @@ void ApplicationCore::activateMenuItem() {
     return;
   }
   if (menuPage_ == MenuPage::Buttons) {
-    if (menuSelectedIndex_ == 0) powerButtonEnabled_ = !powerButtonEnabled_;
-    else { displayOn_ = false; screen_ = Screen::BasicView; }
+    powerButtonEnabled_ = !powerButtonEnabled_;
     return;
   }
   if (menuPage_ == MenuPage::Main) {
     mainMenuSelectedIndex_ = menuSelectedIndex_;
+    if (menuSelectedIndex_ == countOf(MAIN_ITEMS) - 1) {
+      displayOn_ = false;
+      screen_ = Screen::BasicView;
+      return;
+    }
     if (menuSelectedIndex_ == 0) {
       if (hasRouteOrder_) {
         orderAccessAction_ = OrderAccessAction::Replace;
@@ -1224,16 +1291,20 @@ void ApplicationCore::activateMenuItem() {
       openSubmenu(MenuPage::InternalTripReset);
     } else if (menuSelectedIndex_ == 3) {
       resetTrip1();
+      tripResetNoticeUntilMs_ = clock_.elapsedSinceSetMilliseconds() + 1000;
+      screen_ = Screen::TripResetNotice;
     } else if (menuSelectedIndex_ == 4) {
       resetTrip2();
+      tripResetNoticeUntilMs_ = clock_.elapsedSinceSetMilliseconds() + 1000;
+      screen_ = Screen::TripResetNotice;
     }
   } else if (menuPage_ == MenuPage::System && menuSelectedIndex_ == 0) {
     screen_ = Screen::Diagnostics;
-  } else if (menuPage_ == MenuPage::System && menuSelectedIndex_ == 2) {
-    openSubmenu(MenuPage::Buttons);
   } else if (menuPage_ == MenuPage::System && menuSelectedIndex_ == 1) {
     editedDebugDisplaySettings_ = debugDisplaySettings_;
     openSubmenu(MenuPage::Debug);
+  } else if (menuPage_ == MenuPage::System && menuSelectedIndex_ == 2) {
+    openSubmenu(MenuPage::Buttons);
   }
 }
 
@@ -1356,6 +1427,13 @@ void ApplicationCore::tick(uint32_t nowUs) {
     if (before == domain::CompetitionState::JAT_RESULT &&
         competition_.state() == domain::CompetitionState::EDIT_START_TIME)
       beginJatStartTimeEdit();
+    if (screen_ == Screen::TripResetNotice &&
+        clock_.elapsedSinceSetMilliseconds() >= tripResetNoticeUntilMs_)
+      screen_ = Screen::BasicView;
+    if (screen_ == Screen::JatResult &&
+        competition_.pendingJatType() == domain::JatType::EMIT_JAT_OFFSET &&
+        clock_.elapsedSinceSetMilliseconds() >= jatResultScreenUntilMs_)
+      screen_ = Screen::BasicView;
     if (screen_ == Screen::StartTimeEdit) {
       const ClockTime nowClock = clock_.now();
       const int32_t nowMinutes = nowClock.hour * 60 + nowClock.minute;
@@ -1427,8 +1505,10 @@ DisplayModel ApplicationCore::displayModel() const {
   model.atOverlay = {atOverlayVisible_, atClockTime_, !atDistanceArmed_,
                      atTravelledDistanceMm_,
                      competitionSettings_.atDisplayDistanceM};
-  model.jatResult = {competition_.arrivalClockTime(),
-                     competition_.finalDeltaMs() / 1000};
+  model.jatResult = {
+      competition_.arrivalClockTime(), competition_.finalDeltaMs() / 1000,
+      competition_.proposedStartClockTime(), model.clock,
+      competition_.pendingJatType() == domain::JatType::EMIT_JAT_OFFSET};
   model.finishResult.visible = !finishResultDismissed_ &&
       competition_.state() == domain::CompetitionState::FINISHED &&
       !competition_.stageResults().empty();
@@ -1439,7 +1519,7 @@ DisplayModel ApplicationCore::displayModel() const {
   const uint64_t elapsed =
       clock_.isSet() ? clock_.elapsedSinceSetMilliseconds() : 0;
   model.startTimeEdit = {
-      editedStageStartTime_, competition_.pendingJatType(),
+      editedStageStartTime_, model.clock, competition_.pendingJatType(),
       !stageStartProposalExpired_ || ((elapsed / 500ULL) % 2ULL == 0),
       !startTimeCorrection_ &&
           competition_.pendingJatType() == domain::JatType::EMIT_JAT_OFFSET};
@@ -1477,7 +1557,10 @@ DisplayModel ApplicationCore::displayModel() const {
   model.order.editor = routeOrderEditor_.view();
   model.orderAccess.selectedAction = orderAccessAction_;
   model.order.hasSelectedSegment = false;
-  model.order.showsStartTime = false;
+  model.order.showsStartTime =
+      screen_ == Screen::OrderEdit &&
+      model.order.editor.phase == route::EditorPhase::STAGE_SELECT &&
+      model.order.editor.selectedStage == 0;
   model.competition.state =
       finishResultDismissed_ ? domain::CompetitionState::IDLE
                              : competition_.state();
@@ -1490,7 +1573,7 @@ DisplayModel ApplicationCore::displayModel() const {
   model.competition.editedTimeAdjustmentSeconds =
       editedTimeAdjustmentSeconds_;
   const domain::SegmentDefinition* current = competition_.currentSegment();
-  if (competition_.state() == domain::CompetitionState::WAIT_START) {
+  if (competition_.firstSegmentPending()) {
     if (current) {
       model.competition.nextSegment = *current;
       model.competition.hasNextSegment = true;
@@ -1508,10 +1591,9 @@ DisplayModel ApplicationCore::displayModel() const {
   }
   if (screen_ == Screen::OrderEdit &&
       model.order.editor.phase == route::EditorPhase::BROWSE) {
-    if (model.order.editor.selectedSegment == 0) {
-      model.order.showsStartTime = true;
-    } else if (model.order.editor.selectedSegment <=
-               routeOrderEditor_.draft().segments.size()) {
+    if (model.order.editor.selectedSegment > 0 &&
+        model.order.editor.selectedSegment <=
+            routeOrderEditor_.draft().segments.size()) {
       model.order.selectedSegment = routeOrderEditor_.draft().segments[
           model.order.editor.selectedSegment - 1];
       model.order.hasSelectedSegment = true;
@@ -1580,7 +1662,9 @@ DisplayModel ApplicationCore::displayModel() const {
   if (screen_ == Screen::Menu && menuPage_ == MenuPage::Buttons &&
       menuScrollOffset_ == 0)
     model.menu.rows[0].label = powerButtonEnabled_
-        ? "VIRTAPAINIKE: PAALLE" : "VIRTAPAINIKE: POIS";
+                                   ? "VIRTAPAINIKE: PAALLE"
+                                   : "VIRTAPAINIKE: POIS";
+
   if (screen_ == Screen::Diagnostics) {
     model.diagnostics.currentScreen = screen_;
     for (uint8_t index = 0; index < 8; ++index) {
@@ -1782,8 +1866,15 @@ void ApplicationCore::completeRouteOrderSave(bool succeeded) {
     currentRouteOrder_ = routeOrderEditor_.draft();
     hasRouteOrder_ = true;
     loadedRouteOrderActive_ = true;
+    competitionProgressClearPending_ = true;
+    hasLoadedCompetitionProgress_ = false;
     activateCurrentRouteOrder();
-    screen_ = Screen::BasicView;
+    if (competition_.state() == domain::CompetitionState::EDIT_START_TIME)
+      beginJatStartTimeEdit();
+    else if (competition_.state() == domain::CompetitionState::JAT_RESULT)
+      screen_ = Screen::JatResult;
+    else
+      screen_ = Screen::BasicView;
   }
   routeOrderEditor_.completeSave(succeeded);
 }
@@ -1795,8 +1886,24 @@ void ApplicationCore::activateCurrentRouteOrder() {
       (static_cast<uint32_t>(now.hour) * 3600UL +
        static_cast<uint32_t>(now.minute) * 60UL + now.second) *
       1000UL;
-  if (competition_.activate(currentRouteOrder_, millisecondsOfDay,
-                            clock_.elapsedSinceSetMilliseconds())) {
+  bool activated = false;
+  bool restored = false;
+  if (hasLoadedCompetitionProgress_) {
+    competitionProgressRestoreResultPending_ = true;
+    competitionProgressRestoreSucceeded_ = false;
+    if (loadedCompetitionProgress_.routeSignature == currentRouteSignature()) {
+      activated = competition_.restoreProgress(
+          currentRouteOrder_, loadedCompetitionProgress_, millisecondsOfDay,
+          clock_.elapsedSinceSetMilliseconds());
+      competitionProgressRestoreSucceeded_ = activated;
+      restored = activated;
+    }
+  }
+  hasLoadedCompetitionProgress_ = false;
+  if (!activated)
+    activated = competition_.activate(currentRouteOrder_, millisecondsOfDay,
+                                       clock_.elapsedSinceSetMilliseconds());
+  if (activated) {
     mittisTripSegmentIndex_ = 0xFFFFU;
     trip1DisplayFreezeActive_ = false;
     finishResultDismissed_ = false;
@@ -1806,7 +1913,67 @@ void ApplicationCore::activateCurrentRouteOrder() {
         {currentRouteOrder_.startHour, currentRouteOrder_.startMinute, 0};
     appendEvent(accepted);
     loadedRouteOrderActive_ = false;
+    if (!restored) competitionProgressSavePending_ = true;
   }
+}
+
+uint32_t ApplicationCore::currentRouteSignature() const {
+  uint32_t hash = 2166136261UL;
+  const auto mix = [&hash](uint32_t value) {
+    for (uint8_t byte = 0; byte < 4; ++byte) {
+      hash ^= static_cast<uint8_t>(value >> (byte * 8));
+      hash *= 16777619UL;
+    }
+  };
+  mix(currentRouteOrder_.schemaVersion);
+  mix(static_cast<uint32_t>(currentRouteOrder_.competitionType));
+  mix(currentRouteOrder_.startHour);
+  mix(currentRouteOrder_.startMinute);
+  mix(static_cast<uint32_t>(currentRouteOrder_.segments.size()));
+  for (const domain::SegmentDefinition& segment : currentRouteOrder_.segments) {
+    mix(segment.segmentIndex);
+    mix(static_cast<uint32_t>(segment.segmentType));
+    mix(segment.value);
+    mix(segment.hasMittisDuration ? 1U : 0U);
+    mix(segment.mittisDurationSeconds);
+    mix(static_cast<uint32_t>(segment.pointTypeAtEnd));
+    mix(segment.hasJatType ? 1U : 0U);
+    mix(static_cast<uint32_t>(segment.jatType));
+    mix(segment.hasJatOffsetMinutes ? 1U : 0U);
+    mix(static_cast<uint16_t>(segment.jatOffsetMinutes));
+  }
+  return hash;
+}
+
+void ApplicationCore::setInitialCompetitionProgress(
+    const domain::CompetitionProgressSnapshot& snapshot) {
+  loadedCompetitionProgress_ = snapshot;
+  hasLoadedCompetitionProgress_ = true;
+}
+
+bool ApplicationCore::takeCompetitionProgressSaveRequest(
+    domain::CompetitionProgressSnapshot& snapshot) {
+  if (!competitionProgressSavePending_ ||
+      competition_.state() == domain::CompetitionState::IDLE ||
+      competition_.state() == domain::CompetitionState::FINISHED)
+    return false;
+  competitionProgressSavePending_ = false;
+  snapshot = competition_.progressSnapshot();
+  snapshot.routeSignature = currentRouteSignature();
+  return true;
+}
+
+bool ApplicationCore::takeCompetitionProgressClearRequest() {
+  const bool pending = competitionProgressClearPending_;
+  competitionProgressClearPending_ = false;
+  return pending;
+}
+
+bool ApplicationCore::takeCompetitionProgressRestoreResult(bool& restored) {
+  if (!competitionProgressRestoreResultPending_) return false;
+  competitionProgressRestoreResultPending_ = false;
+  restored = competitionProgressRestoreSucceeded_;
+  return true;
 }
 
 domain::EventRecord ApplicationCore::makeEvent(
@@ -1843,22 +2010,12 @@ uint64_t ApplicationCore::appendEvent(domain::EventRecord record) {
 }
 
 void ApplicationCore::handleAtRelease() {
-  const uint64_t nowMs =
-      clock_.isSet() ? clock_.elapsedSinceSetMilliseconds() : 0;
-  if (atEventCancellable_ && nowMs - atEventMonotonicMs_ <= 3000) {
-    eventRepository_.markCancelled(atEventId_);
-    domain::EventRecord cancellation =
-        makeEvent(domain::DomainEventType::AT_CANCELLED);
-    cancellation.payload.referencedEventId = atEventId_;
-    appendEvent(cancellation);
-    atEventCancellable_ = false;
+  if (atOverlayVisible_) {
     atOverlayVisible_ = false;
     return;
   }
   domain::EventRecord record = makeEvent(domain::DomainEventType::AT);
-  atEventId_ = appendEvent(record);
-  atEventCancellable_ = atEventId_ != 0;
-  atEventMonotonicMs_ = nowMs;
+  appendEvent(record);
   atClockTime_ = record.clockTime;
   atOverlayVisible_ = true;
   atLowSpeedTiming_ = false;

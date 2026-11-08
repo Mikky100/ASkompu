@@ -11,18 +11,20 @@
 #include "ports/ArduinoClock.h"
 #include "ports/PulseDiagnosticSerial.h"
 #include "settings/SettingsRepository.h"
+#include "settings/CompetitionProgressStore.h"
 #include "settings/PreferencesRouteOrderStore.h"
 #include "ui/DisplayView.h"
 
 namespace {
 
-constexpr uint32_t DEBOUNCE_MS = 20;
+constexpr uint32_t DEBOUNCE_MS = 12;
+constexpr uint32_t FOOT_RESET_DEBOUNCE_MS = 5;
 constexpr uint32_t POLL_INTERVAL_MS = 10;
 constexpr uint32_t POINT_LONG_PRESS_MS = 2000;
 constexpr uint32_t POINT_MINIMUM_PRESS_INTERVAL_MS = 500;
 constexpr uint32_t REVERSE_STABILITY_MS = 20;
 constexpr uint32_t LIGHT_SWITCH_STABILITY_MS = 20;
-constexpr uint32_t RIGHT_MINIMUM_PRESS_INTERVAL_MS = 350;
+constexpr uint32_t RIGHT_MINIMUM_PRESS_INTERVAL_MS = 180;
 constexpr uint32_t MAXIMUM_ACCEPTED_SPEED_KMH = 200;
 
 input::DebouncedButton leftButton(BoardConfig::PIN_BUTTON_LEFT,
@@ -62,7 +64,7 @@ input::DebouncedButton trip1ResetButton(BoardConfig::PIN_BUTTON_TRIP1_RESET,
 #ifdef ASKOMPU_HAS_FOOT_RESET_PIN
 input::DebouncedButton footResetButton(BoardConfig::PIN_BUTTON_FOOT_RESET,
                                        BoardConfig::BUTTON_PRESSED_LEVEL,
-                                       DEBOUNCE_MS);
+                                       FOOT_RESET_DEBOUNCE_MS);
 #endif
 input::StableSignalFilter reverseFilter(REVERSE_STABILITY_MS);
 #ifdef ASKOMPU_HAS_LIGHT_SWITCH_PIN
@@ -78,13 +80,15 @@ core::ApplicationCore application(
     softwareClock, CalibrationConfig::DEFAULT_MILLIMETERS_PER_PULSE,
     DemoConfig::zeroSpeedTimeoutUs);
 settings::SettingsRepository settingsRepository;
+settings::CompetitionProgressStore competitionProgressStore;
 settings::PreferencesRouteOrderStore routeOrderStore;
 ui::DisplayView view;
 uint32_t lastDisplayUpdateMs = 0;
 core::Screen renderedScreen = core::Screen::StartupTimeEntry;
 bool pointLongPressPending = false;
 ports::PulseDiagnosticSerial pulseSerial;
-bool serialResetRequested = false, serialDumpRequested = false;
+bool serialResetRequested = false;
+bool serialDumpRequested = false;
 
 bool dispatchButton(input::DebouncedButton& button, core::ButtonId id,
                     uint32_t nowMs) {
@@ -170,7 +174,11 @@ bool dispatchLeftButton(uint32_t nowMs) {
 bool dispatchRightButton(uint32_t nowMs) {
   bool dispatched = false;
   const bool diagnostics = application.screen() == core::Screen::Diagnostics;
-  rightButton.consumePressedEvent();
+  if (rightButton.consumePressedEvent() && diagnostics) {
+    application.handleButton({core::ButtonId::Right,
+                              core::ButtonEventType::Press, nowMs});
+    dispatched = true;
+  }
   if (rightButton.consumeLongPressEvent()) {
     application.handleButton({core::ButtonId::Right,
                               core::ButtonEventType::LongStart, nowMs});
@@ -179,8 +187,6 @@ bool dispatchRightButton(uint32_t nowMs) {
   if (rightButton.consumeReleasedEvent()) {
     const bool shortPress = rightButton.consumeShortPressEvent();
     if (diagnostics) {
-      application.handleButton({core::ButtonId::Right,
-                                core::ButtonEventType::Press, nowMs});
       application.handleButton({core::ButtonId::Right,
                                 core::ButtonEventType::Release, nowMs});
       dispatched = true;
@@ -198,7 +204,7 @@ bool dispatchRightButton(uint32_t nowMs) {
 
 void setup() {
   Serial.begin(115200);
-  Serial.printf("ASkompu issues 6-9 build %s %s\n", __DATE__, __TIME__);
+  Serial.printf("ASkompu 0.1.2 build %s %s\n", __DATE__, __TIME__);
 
   const settings::CalibrationLoadResult calibration =
       settingsRepository.loadCalibration();
@@ -224,6 +230,9 @@ void setup() {
         routeOrderStore.activity() == route::RouteOrderActivity::ACTIVE);
     Serial.printf("Route order: %u segments (NVS)\n",
                   static_cast<unsigned>(routeOrder.segments.size()));
+    domain::CompetitionProgressSnapshot progress;
+    if (competitionProgressStore.load(progress))
+      application.setInitialCompetitionProgress(progress);
   }
 
   leftButton.begin();
@@ -308,7 +317,8 @@ void loop() {
 #ifdef ASKOMPU_HAS_FOOT_RESET_PIN
       || footResetButton.isPressed()
 #endif
-      ) application.wakeDisplay();
+      )
+    application.wakeDisplay();
 
   const bool rawReverse =
       digitalRead(BoardConfig::PIN_REVERSE_INPUT) ==
@@ -316,16 +326,17 @@ void loop() {
   if (reverseFilter.update(rawReverse, nowMs))
     application.handleReverseSignal({reverseFilter.active(), nowMs});
 
-  for (uint8_t i = 0; i < 8 && Serial.available(); ++i) {
+  for (uint8_t index = 0; index < 8 && Serial.available(); ++index) {
     const char command = Serial.read();
     if (command == 'p') serialDumpRequested = true;
     if (command == 'r') serialResetRequested = true;
   }
-  const bool menuResetRequested = application.takePulseDiagnosticsResetRequest();
-  const bool resetDiagnostics = serialResetRequested || menuResetRequested;
+  const bool resetDiagnostics =
+      serialResetRequested || application.takePulseDiagnosticsResetRequest();
   serialResetRequested = false;
   if (resetDiagnostics) pulseSerial.cancel();
-  const input::PulseSnapshot pulseSnapshot = pulseInput.consumeSnapshot(resetDiagnostics);
+  const input::PulseSnapshot pulseSnapshot =
+      pulseInput.consumeSnapshot(resetDiagnostics);
   const uint32_t nowUs = clockSource.monotonicMicroseconds();
 
   bool inputDispatched = false;
@@ -349,19 +360,31 @@ void loop() {
   application.handleDistancePulses(
       {pulseSnapshot.pendingPulses, pulseSnapshot.previousPulseAtUs,
        pulseSnapshot.lastPulseAtUs, nowUs, reverseFilter.active()});
-  if (!resetDiagnostics) pulseInput.recordDelivered(pulseSnapshot.pendingPulses);
+  if (!resetDiagnostics)
+    pulseInput.recordDelivered(pulseSnapshot.pendingPulses);
   application.tick(nowUs);
-  const bool menuDumpRequested = application.takePulseDiagnosticsDumpRequest();
-  if (serialDumpRequested || menuDumpRequested) {
+  if (serialDumpRequested || application.takePulseDiagnosticsDumpRequest()) {
     serialDumpRequested = false;
-    pulseSerial.capture(pulseInput, application.millimetersPerPulse(),
-        BoardConfig::PIN_PULSE_INPUT, BoardConfig::PULSE_INTERRUPT_MODE == FALLING);
+    pulseSerial.capture(
+        pulseInput, application.millimetersPerPulse(),
+        BoardConfig::PIN_PULSE_INPUT,
+        BoardConfig::PULSE_INTERRUPT_MODE == FALLING);
   }
   pulseSerial.service();
-  const auto pulseDiagnostics = pulseInput.diagnostics();
-  application.setPulseDiagnostics(pulseDiagnostics,
-      pulseDiagnostics.hasAccepted ? micros() - pulseDiagnostics.lastAcceptedUs : 0,
-      BoardConfig::PIN_PULSE_INPUT, BoardConfig::PULSE_INTERRUPT_MODE == FALLING);
+  const input::PulseDiagnosticsSnapshot pulseDiagnostics =
+      pulseInput.diagnostics();
+  application.setPulseDiagnostics(
+      pulseDiagnostics,
+      pulseDiagnostics.hasAccepted
+          ? micros() - pulseDiagnostics.lastAcceptedUs
+          : 0,
+      BoardConfig::PIN_PULSE_INPUT,
+      BoardConfig::PULSE_INTERRUPT_MODE == FALLING);
+
+  bool progressRestored = false;
+  if (application.takeCompetitionProgressRestoreResult(progressRestored))
+    Serial.printf("Competition progress restore: %s\n",
+                  progressRestored ? "ok" : "rejected; started from route");
 
   uint32_t calibrationToSave = 0;
   if (application.takeCalibrationSaveRequest(calibrationToSave)) {
@@ -402,12 +425,18 @@ void loop() {
   if (application.takeRouteOrderCompletionRequest()) {
     application.completeRouteOrderCompletion(routeOrderStore.markCompleted());
   }
+  if (application.takeCompetitionProgressClearRequest())
+    competitionProgressStore.clear();
+  domain::CompetitionProgressSnapshot progress;
+  if (application.takeCompetitionProgressSaveRequest(progress))
+    competitionProgressStore.save(progress);
 
   const core::DisplayModel displayModel = application.displayModel();
   view.setBacklight(displayModel.displayOn);
   const bool screenChanged = displayModel.screen != renderedScreen;
   const bool periodicScreen =
       displayModel.screen == core::Screen::BasicView ||
+      displayModel.screen == core::Screen::JatResult ||
       displayModel.screen == core::Screen::StartTimeEdit ||
       displayModel.screen == core::Screen::Diagnostics ||
       displayModel.screen == core::Screen::PulseDiagnostics;

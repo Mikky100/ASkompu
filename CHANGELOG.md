@@ -1,21 +1,30 @@
 # Changelog
 
-## 0.1.1 — Verified prototype — 2026-11-06
+## Unreleased
 
-- Fixed JAT+ULA/MLA adding the next interval's ideal time before departure
-  (issue #6).
-- Start with the display lit and the power-switch function disabled each boot;
-  added session-only power-switch and display-off menu actions with key/reset
-  wake (issue #7).
-- Added shared internal-trip precision hysteresis: above 31 / below 29 km/h
-  continuously for 1500 ms, with truncation and unchanged internal distance
-  precision (issue #8).
-- Added bounded pulse diagnostics, separate observed/accepted/rejected/delivered
-  counters, timing history, anomaly capture and nonblocking USB reports without
-  changing the pulse filter (issue #9).
-- Verified 147 native tests, native and both hardware builds, ILI9488 upload
-  hash verification and live USB diagnostics. See
-  [verification scope](docs/releases/0.1.1.md) for remaining physical tests.
+## 0.1.2 — Verified prototype
+
+- Built the release on top of the latest conversation worktree instead of the
+  older 0.1.0 baseline used accidentally for 0.1.1.
+- Fixed JAT+MLA/ULA next-stage timing so the first interval starts exactly once
+  at the accepted departure time, including restored competition progress.
+- Made the physical power/light switch opt-in for each session and added a
+  display-off action as the last main-menu item after System. Opening the menu
+  with Up therefore selects `SAMMUTA NAYTTO` first; any button wakes the display.
+- Added speed-dependent trip presentation precision with 29/31 km/h hysteresis
+  and a continuous 1.5 second threshold delay.
+- Added interrupt-safe pulse diagnostics, history capture, overflow counters,
+  an on-device diagnostics view and non-blocking USB serial export (`p` dump,
+  `r` reset).
+- Reduced the foot-reset software debounce from 12 ms to 5 ms.
+- Combined route-order continuation into one wrapping
+  `AIKA / NOPEUS / MITTIS / MAALI / JAT` choice. `MITTIS` is omitted after one
+  has already been entered, and the default/direction order follows issue #11.
+- Published the display-shutdown placement change as issue #12, a sub-issue of
+  #7.
+- Preserved the conversation version's route-order stage editor, competition
+  progress restoration, exact JAT seconds, trip-reset confirmation, input
+  guards and robust ILI9488 initialization.
 
 - Added three persistent menu/label font sizes and removed automatic shrinking
   of individual menu rows and the stray small Trip 1 marker.
